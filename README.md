@@ -30,3 +30,11 @@ quic_lb_test.c creates a series of valid configurations, generates connection
 IDs for those configurations, and then extracts the server ID to check that it
 is recoverable. The Makefile compiles this test code, generating a full report
 of configuration parameters.
+
+Contribution Guidelines
+---
+
+Contributions are welcome. However, F5 corporate policy requires contributors to
+complete the Contributor License Agreement and email it to m.duke@f5.com.
+
+https://f5quic.com/quic_lb_cla.pdf
