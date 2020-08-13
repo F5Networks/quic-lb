@@ -21,7 +21,7 @@
 #define QUIC_LB_USABLE_BYTES (QUIC_LB_MAX_CID_LEN - 1)
 
 enum quic_lb_alg {
-    QUIC_LB_OCID,
+    QUIC_LB_PCID,
     QUIC_LB_SCID,
     QUIC_LB_BCID,
 };
@@ -30,17 +30,6 @@ struct quic_lb_generic_config {
     UINT8  cr : 2;
     UINT8  encode_length : 1;
     enum quic_lb_alg alg : 5;
-};
-
-struct quic_lb_ocid_config {
-    UINT8            cr : 2;
-    UINT8  encode_length : 1;
-    enum quic_lb_alg alg : 5;
-    UINT8            sidl;
-    UINT8            bitmask[QUIC_LB_USABLE_BYTES];
-    /* These are presented in host order */
-    UINT8            modulus[QUIC_LB_OCID_SIDL_MAX];
-    UINT8            divisor[QUIC_LB_OCID_SIDL_MAX];
 };
 
 struct quic_lb_scid_config {
@@ -64,174 +53,6 @@ struct quic_lb_bcid_config {
     UINT8            key[16];
     EVP_CIPHER_CTX  *ctx;
 };
-
-#ifndef UINT128_MAX
-   /* Get around the inability to define 128-bit constants */
-   UINT64 uint128_max_array[2] = {0xffffffffffffffffULL,
-           0xffffffffffffffffULL};
-   #define UINT128_MAX *(UINT128 *)uint128_max_array
-#endif
-
-/*
- * Note: this is NOT deterministic because the multiple selection must always
- * be random.
- */
-static void
-quic_lb_ocid_encrypt(void *cid, void *config, size_t cid_len, void *server_use)
-{
-    struct quic_lb_ocid_config *cfg = config;
-    UINT128 max_encoding, max_multiple, multiple = UINT128_MAX, encoding;
-    UINT128 divisor = 0, modulus = 0;
-    UINT8  *cid_ptr, mask_bits = 0, rand_bits, *mask;
-    UINT8  *svr_use_ptr = server_use;
-    int     i, shift, encode_shift;
-
-    for (i = 0; i < (cid_len - 1); i++) {
-        mask_bits += bit_count(cfg->bitmask[i]);
-    }
-    DBG_ASSERT("QUIC-LB config mismatch", cid_len >
-            ROUNDUPDIV(mask_bits + 18, 8));
-    max_encoding = ((UINT128)0x1 << mask_bits) - 1;
-    memcpy(&divisor, cfg->divisor, sizeof(cfg->divisor));
-    memcpy(&modulus, cfg->modulus, sizeof(cfg->modulus));
-    max_multiple = (max_encoding / divisor);
-    if (((max_multiple * divisor) + modulus) > max_encoding) {
-        max_multiple--;
-    }
-    /*
-     * Do not overweight low multiples. We must retry if the result is very
-     * large.
-     */
-    while ((UINT128_MAX - multiple) < max_multiple) {
-        rndset(&multiple, RND_PSEUDO, sizeof(multiple));
-    }
-    multiple = multiple % max_multiple;
-    encoding = modulus + (divisor * multiple);
-
-    /* Put the encoding in the routing mask */
-    memset(cid, 0, cid_len);
-    cid_ptr = (UINT8 *)cid + cid_len - 1;
-    mask = (UINT8 *)cfg->bitmask + cid_len - 2;
-    encode_shift = 0;
-    for (i = 1; i < cid_len; i++) {
-        rand_bits = *svr_use_ptr;
-        svr_use_ptr++;
-        for (shift = 0; shift < 8; shift++) {
-            if (((*mask >> shift) & 0x1) == 0x1) {
-                *cid_ptr |= (((encoding >> encode_shift) & 0x1) << shift);
-                encode_shift++;
-            } else {
-                *cid_ptr |= (rand_bits & (0x1 << shift));
-            }
-        }
-        cid_ptr--;
-        mask--;
-    }
-    *cid_ptr = cfg->encode_length ? (cid_len - 1) : ((*svr_use_ptr) & 0x3f);
-    *cid_ptr |= ((UINT8)cfg->cr << 6); /* Set cfg rotation bits. */
-}
-
-static err_t
-quic_lb_ocid_decrypt(void *cid, void *config, size_t *cid_len, UINT8 *sid)
-{
-    struct quic_lb_ocid_config *cfg = config;
-    UINT128 encoding = 0, divisor = 0, result;
-    int     i, shift, encode_shift;
-    UINT8  *cid_ptr, *mask;
-
-    /* Get the encoding from the routing mask */
-    cid_ptr = (UINT8 *)cid + sizeof(cfg->bitmask);
-    mask = (UINT8 *)cfg->bitmask + sizeof(cfg->bitmask) - 1;
-    encode_shift = 0;
-    if (cfg->encode_length) {
-        *cid_len = (*(UINT8 *)cid & 0x3f) + 1;
-    }
-    for (i = 0; i < sizeof(cfg->bitmask); i++) {
-        if (*mask == 0) {
-            goto skip_byte;
-        }
-        for (shift = 0; shift < 8; shift++) {
-            if (((*mask >> shift) & 0x1) == 0x1) {
-                encoding |= ((UINT128)((*cid_ptr >> shift) & 0x1) <<
-                        encode_shift);
-                encode_shift++;
-            }
-        }
-skip_byte:
-        cid_ptr--;
-        mask--;
-    }
-    memcpy(&divisor, cfg->divisor, sizeof(cfg->divisor));
-    result = encoding % divisor;
-    memcpy(sid, &result, cfg->sidl);
-    return ERR_OK;
-}
-
-#if 0
-static void
-quic_lb_scid_encrypt(void *cid, void *config, size_t cid_len, void *server_use)
-{
-    struct quic_lb_scid_config *cfg = config;
-    UINT8 *ptr = cid, *svr_use_ptr = server_use;
-    UINT8  nonce[16];
-    UINT8  ct[16];
-    int    ct_len, i;
-
-    *ptr = (cfg->cr << 6) | (cfg->encode_length ? (cid_len - 1) :
-            ((*svr_use_ptr) & 0x3f));
-    ptr++;
-    memcpy(ptr, svr_use_ptr, cfg->nonce_len);
-    memset(nonce, 0, sizeof(nonce));
-    memcpy(nonce, ptr, cfg->nonce_len);
-    ptr += cfg->nonce_len;
-    if (EVP_EncryptUpdate(cfg->ctx, ct, &ct_len, nonce, sizeof(nonce)) !=
-            1) {
-        goto err;
-    }
-    if (ct_len != sizeof(nonce)) {
-        goto err;
-    }
-    for (i = 0; i < cfg->sidl; i++) {
-        *(ptr + i) = ct[i] ^ cfg->sid[i];
-    }
-    return;
-err:
-    /* Go to 5-tuple routing*/
-    *(UINT8 *)cid &= 0xc0;
-    return;
-}
-
-static UINT64
-quic_lb_scid_decrypt(void *cid, void *config, size_t *cid_len)
-{
-    struct quic_lb_scid_config *cfg = config;
-    UINT8 *ptr = cid;
-    UINT8  nonce[16], ct[16], sid[11];
-    int    ct_len, i;
-
-    if (cfg->encode_length) {
-        *cid_len = ((*ptr) & 0x3f) + 1;
-    }
-    ptr++;
-    memset(nonce, 0, sizeof(nonce));
-    memcpy(nonce, ptr, cfg->nonce_len);
-    ptr += cfg->nonce_len;
-    if (EVP_EncryptUpdate(cfg->ctx, ct, &ct_len, nonce, sizeof(nonce)) !=
-            1) {
-        goto err;
-    }
-    if (ct_len != sizeof(nonce)) {
-        goto err;
-    }
-    memset(sid, 0, sizeof(sid));
-    for (i = 0; i < cfg->sidl; i++) {
-        sid[i] = *(ptr + i) ^ ct[i];
-    }
-    return (*(UINT64 *)sid);
-err:
-    return 0;
-}
-#endif // old
 
 static inline err_t
 quic_lb_encrypt_apply_nonce(struct quic_lb_scid_config *cfg, UINT8 *nonce,
@@ -257,7 +78,6 @@ quic_lb_encrypt_apply_nonce(struct quic_lb_scid_config *cfg, UINT8 *nonce,
 err:
     return ERR_OTHER;
 }
-
 
 static void
 quic_lb_scid_encrypt(void *cid, void *config, size_t cid_len, void *server_use)
@@ -413,9 +233,6 @@ quic_lb_encrypt_cid(void *cid, void *config, size_t cid_len, void *server_use)
     }
     generic = (struct quic_lb_generic_config *)config;
     switch(generic->alg) {
-    case QUIC_LB_OCID:
-        quic_lb_ocid_encrypt(cid, config, cid_len, server_use);
-        break;
     case QUIC_LB_SCID:
         quic_lb_scid_encrypt(cid, config, cid_len, server_use);
         break;
@@ -444,9 +261,6 @@ quic_lb_decrypt_cid(void *cid, void *config, size_t *cid_len, void *sid)
 
     generic = (struct quic_lb_generic_config *)config;
     switch(generic->alg) {
-    case QUIC_LB_OCID:
-        err = quic_lb_ocid_decrypt(cid, config, cid_len, sid);
-        break;
     case QUIC_LB_SCID:
         err = quic_lb_scid_decrypt(cid, config, cid_len, sid);
         break;
@@ -455,34 +269,6 @@ quic_lb_decrypt_cid(void *cid, void *config, size_t *cid_len, void *sid)
         break;
     }
     return err;
-}
-
-/* The bitmask should be filled out for the entire 19 byte length */
-void *
-quic_lb_load_ocid_config(UINT8 cr, BOOL encode_len, UINT8 *bitmask,
-        UINT8 *modulus, UINT8 *divisor, UINT8 sidl)
-{
-    struct quic_lb_ocid_config *cfg = umalloc(
-            sizeof(struct quic_lb_ocid_config), M_FILTER, UM_ZERO);
-
-    if (cfg == NULL) {
-        goto out;
-    }
-    if (cr > 0x3) {
-        ufree(cfg);
-        cfg = NULL;
-        goto out;
-    }
-    cfg->cr = cr;
-    cfg->encode_length = encode_len;
-    cfg->alg = QUIC_LB_OCID;
-    cfg->sidl = sidl;
-    memcpy(cfg->bitmask, bitmask, QUIC_LB_USABLE_BYTES);
-    memcpy(cfg->modulus, modulus, QUIC_LB_OCID_SIDL_MAX);
-    memcpy(cfg->divisor, divisor, QUIC_LB_OCID_SIDL_MAX);
-
-out:
-    return cfg;
 }
 
 void *
@@ -579,9 +365,6 @@ quic_lb_free_config(void *config)
 
     generic = (struct quic_lb_generic_config *)config;
     switch(generic->alg) {
-    case QUIC_LB_OCID:
-        ctx = NULL;
-        goto out;
     case QUIC_LB_SCID:
         ctx = ((struct quic_lb_scid_config *)config)->ctx;
         break;

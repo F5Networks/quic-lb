@@ -29,8 +29,6 @@ void quic_lb_encrypt_cid_random(void *cid, void *config, size_t cid_len);
 err_t quic_lb_decrypt_cid(void *cid, void *config, size_t *cid_len,
         void *result);
 /* Temporary functions */
-void *quic_lb_load_ocid_config(UINT8 cr, BOOL encode_len, UINT8 *bitmask,
-        UINT8 *modulus, UINT8 *divisor, UINT8 sidl);
 void *quic_lb_load_scid_config(UINT8 cr, BOOL encode_len, UINT8 *key,
         UINT8 cidl, UINT8 nonce_len, UINT8 *sid);
 void *quic_lb_load_bcid_config(UINT8 cr, BOOL encode_len, UINT8 *key,
