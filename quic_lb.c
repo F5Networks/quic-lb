@@ -32,6 +32,14 @@ struct quic_lb_generic_config {
     enum quic_lb_alg alg : 5;
 };
 
+struct quic_lb_pcid_config {
+    UINT8            cr : 2;
+    UINT8  encode_length : 1;
+    enum quic_lb_alg alg : 5;
+    UINT8            sidl;
+    UINT8            sid[QUIC_LB_PCID_SIDL_MAX];
+};
+
 struct quic_lb_scid_config {
     UINT8            cr : 2;
     UINT8  encode_length : 1;
@@ -53,6 +61,42 @@ struct quic_lb_bcid_config {
     UINT8            key[16];
     EVP_CIPHER_CTX  *ctx;
 };
+
+static void
+quic_lb_pcid_encrypt(void *cid, void *config, size_t cid_len, void *server_use)
+{
+    struct quic_lb_pcid_config *cfg = config;
+    UINT8 *ptr = cid;
+
+    if (cfg->encode_length) {
+        *ptr = cid_len - 1;
+    } else {
+        memcpy(ptr, server_use, 1);
+    }
+    *ptr &= 0x3f;
+    *ptr |= (cfg->cr << 6);
+    ptr++;
+    memcpy(ptr, cfg->sid, cfg->sidl);
+    ptr += cfg->sidl;
+    if (cid_len > (cfg->sidl + 1)) {
+        memcpy(ptr, server_use + 1, cid_len - (cfg->sidl + 1));
+    }
+    return;
+}
+
+static err_t
+quic_lb_pcid_decrypt(void *cid, void *config, size_t *cid_len, UINT8 *sid)
+{
+    struct quic_lb_pcid_config *cfg = config;
+    UINT8 *ptr = cid;
+
+    if (cfg->encode_length) {
+        *cid_len = (*ptr & 0x3f) + 1;
+    }
+    ptr++;
+    memcpy(sid, ptr, cfg->sidl);
+    return ERR_OK;
+}
 
 static inline err_t
 quic_lb_encrypt_apply_nonce(struct quic_lb_scid_config *cfg, UINT8 *nonce,
@@ -233,6 +277,9 @@ quic_lb_encrypt_cid(void *cid, void *config, size_t cid_len, void *server_use)
     }
     generic = (struct quic_lb_generic_config *)config;
     switch(generic->alg) {
+    case QUIC_LB_PCID:
+        quic_lb_pcid_encrypt(cid, config, cid_len, server_use);
+        break;
     case QUIC_LB_SCID:
         quic_lb_scid_encrypt(cid, config, cid_len, server_use);
         break;
@@ -261,6 +308,9 @@ quic_lb_decrypt_cid(void *cid, void *config, size_t *cid_len, void *sid)
 
     generic = (struct quic_lb_generic_config *)config;
     switch(generic->alg) {
+    case QUIC_LB_PCID:
+        err = quic_lb_pcid_decrypt(cid, config, cid_len, sid);
+        break;
     case QUIC_LB_SCID:
         err = quic_lb_scid_decrypt(cid, config, cid_len, sid);
         break;
@@ -269,6 +319,29 @@ quic_lb_decrypt_cid(void *cid, void *config, size_t *cid_len, void *sid)
         break;
     }
     return err;
+}
+
+void *
+quic_lb_load_pcid_config(UINT8 cr, BOOL encode_len, UINT8 sidl, UINT8 *sid)
+{
+    struct quic_lb_pcid_config *cfg = umalloc(
+            sizeof(struct quic_lb_pcid_config), M_FILTER, UM_ZERO);
+
+    if (cfg == NULL) {
+        goto out;
+    }
+    if ((cr > 0x3) || (sidl > QUIC_LB_PCID_SIDL_MAX)) {
+        ufree(cfg);
+        cfg = NULL;
+        goto out;
+    }
+    cfg->cr = cr;
+    cfg->encode_length = encode_len;
+    cfg->alg = QUIC_LB_PCID;
+    cfg->sidl = sidl;
+    memcpy(cfg->sid, sid, sidl);
+out:
+    return cfg;
 }
 
 void *
@@ -365,6 +438,9 @@ quic_lb_free_config(void *config)
 
     generic = (struct quic_lb_generic_config *)config;
     switch(generic->alg) {
+    case QUIC_LB_PCID:
+        ctx = NULL;
+        break;
     case QUIC_LB_SCID:
         ctx = ((struct quic_lb_scid_config *)config)->ctx;
         break;
