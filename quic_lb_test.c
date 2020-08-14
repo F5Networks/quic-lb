@@ -22,79 +22,46 @@
 #define TEST_QUIC_LB_NUM_SRV_ID 5
 #define TEST_QUIC_LB_PER_SERVER 1
 
-
 static void
-test_quic_lb_ocid(void)
+test_quic_lb_pcid(void)
 {
-    UINT8  bitmask[QUIC_LB_MAX_CID_LEN - 1], cid[QUIC_LB_MAX_CID_LEN],
-            one_count, zero_count;
-    UINT8  divisor[QUIC_LB_OCID_SIDL_MAX], modulus[QUIC_LB_OCID_SIDL_MAX],
-            result[QUIC_LB_OCID_SIDL_MAX];
-    BOOL   len_encode;
-    size_t mask_len, cid_len;
-    const UINT8 sidl = 2;
+    UINT8  sidl = 0, sid[QUIC_LB_PCID_SIDL_MAX], cid[QUIC_LB_MAX_CID_LEN];
+    UINT8  result[QUIC_LB_PCID_SIDL_MAX];
     int    cfg, srv, run, i;
+    size_t cid_len;
     void  *record;
+    BOOL   len_encode;
 
     for (cfg = 0; cfg < TEST_QUIC_LB_NUM_CONFIG; cfg++) {
-        mask_len = rnd8_range(RND_PSEUDO, 9) + 10;
-        cid_len = mask_len + 1;
-try_again:
-        one_count = 0;
         len_encode = (cfg % 2 == 0);
-        memset(bitmask, 0, sizeof(bitmask));
-        rndset(bitmask, RND_PSEUDO, mask_len);
-        for (i = 0; i < mask_len; i++) {
-            one_count +=  bit_count((UINT32)bitmask[i]);
-        }
-        zero_count = (8 * mask_len) - one_count;
-        if (zero_count < 16) {
-            goto try_again;
-        }
-        if (one_count < 32) {
-            goto try_again;
-        }
-        memset(divisor, 0, sizeof(divisor));
-        while (divisor[sidl] == 0) {
-            /* Divisor had better be larger than all SIDs! */
-            rndset(&divisor, RND_PSEUDO, sidl + 1);
-        }
-        divisor[0] |= 0x1; /* always odd */
+        sidl++;
+        cid_len = sidl + 1;
 #ifdef NOBIGIP
-        printf("OCID LB configuration: cr_bits 0x0 length_self_encoding: %s "
-                "bitmask ", len_encode ? "y" : "n");
-        for (i = 0; i < mask_len; i++) {
-            printf("%02x", bitmask[i]);
-        }
-        printf(" divisor ");
-        for (i = 0; i < sidl + 1; i++) {
-            printf("%02x", divisor[i]);
-        }
-        printf(" cid_len %lu\n", cid_len);
+        printf("PCID LB configuration: cr_bits 0x0 length_self_encoding: %s "
+                "sid_len %u\n", len_encode ? "y" : "n", sidl);
 #endif
-        memset(modulus, 0, sizeof(modulus));
         for (srv = 0; srv < TEST_QUIC_LB_NUM_SRV_ID; srv++) {
-            rndset(modulus, RND_PSEUDO, sidl);
-            record = quic_lb_load_ocid_config(0, len_encode, bitmask, modulus,
-                    divisor, sidl);
+            memset(sid, 0, sizeof(sid));
+            rndset(sid, RND_PSEUDO, sidl);
+            record = quic_lb_load_pcid_config(0, len_encode, sidl, sid);
             CUT_ASSERT(record != NULL);
             for (run = 0; run < TEST_QUIC_LB_PER_SERVER; run++) {
                 quic_lb_encrypt_cid_random(cid, record, cid_len);
+                CUT_ASSERT(quic_lb_decrypt_cid(cid, record, &cid_len, result) ==
+                        ERR_OK);
 #ifdef NOBIGIP
                 printf("cid ");
-                for (i = 0; i < (mask_len + 1); i++) {
+                for (i = 0; i < cid_len; i++) {
                     printf("%02x", cid[i]);
                 }
-                printf("sid ");
+                printf(" sid ");
                 for (i = 0; i < sidl; i++) {
-                    printf("%02x", modulus[i]);
+                    printf("%02x", sid[i]);
                 }
                 printf("\n");
 #endif
-                CUT_ASSERT(quic_lb_decrypt_cid(cid, record, &cid_len, result)
-                        == ERR_OK);
-                CUT_ASSERT(memcmp(result, modulus, sidl) == 0);
-                CUT_ASSERT(cid_len == mask_len + 1);
+                CUT_ASSERT(memcmp(result, sid, sidl) == 0);
+                CUT_ASSERT(cid_len == sidl + 1);
             }
             quic_lb_free_config(record);
             ufree(record);
@@ -221,13 +188,13 @@ test_quic_lb_bcid(void)
 #ifdef NOBIGIP
 int main(int argc, char* argv[])
 {
-    test_quic_lb_ocid();
+    test_quic_lb_pcid();
     test_quic_lb_scid();
     test_quic_lb_bcid();
 }
 #else
 CUT_SUITE(quic_lb);
-CUT_SUITE_TEST(quic_lb, test_quic_lb_ocid);
+CUT_SUITE_TEST(quic_lb, test_quic_lb_pcid);
 CUT_SUITE_TEST(quic_lb, test_quic_lb_scid);
 CUT_SUITE_TEST(quic_lb, test_quic_lb_bcid);
 #endif
