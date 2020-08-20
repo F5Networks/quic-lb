@@ -3,10 +3,9 @@
  * This source code is subject to the terms of the Apache License,
  * version 2.0 (https://www.apache.org/licenses/LICENSE-2.0)
  */
-#ifdef NOBIGIP
 #include <openssl/evp.h>
 #include "quic_lb.h"
-#else
+#ifndef NOBIGIP
 #include <openssl/evp.h>
 #include <local/sys/cpu.h>
 #include <local/sys/debug.h>
@@ -28,7 +27,8 @@
 struct quic_lb_lb_ctx {
     UINT8            cr : 2;
     UINT8            encode_length : 1;
-    enum quic_lb_alg alg : 5;
+    enum quic_lb_alg alg : 2;
+    UINT8            reserved : 3;
     size_t           sidl;
     int            (*decrypt)(void *ctx, void *cid, void *sid, size_t *cid_len);
     void            *crypto_ctx;
@@ -126,14 +126,14 @@ quic_lb_encrypt_apply_nonce(void *crypto_ctx, UINT8 *nonce, UINT8 nonce_len,
     }
     return ERR_OK;
 err:
-    return ERR_OTHER;
+    return ERR_REJECT;
 }
 
 static void
 quic_lb_scid_encrypt(void *ctx, void *cid, void *server_use)
 {
     struct quic_lb_server_ctx *cfg = ctx;
-    UINT8  *nonce = cid + 1, *sid = nonce + cfg->nonce_len,
+    UINT8  *nonce = (UINT8 *)cid + 1, *sid = nonce + cfg->nonce_len,
            *extra = sid + cfg->sidl;
 
     if (cfg->nonce_ctr > ((1 << (cfg->nonce_len * 8)) - 1)) {
@@ -174,14 +174,15 @@ static int
 quic_lb_scid_decrypt(void *ctx, void *cid, void *sid, size_t *cid_len)
 {
     struct quic_lb_lb_ctx *cfg = ctx;
+    UINT8 *read = cid;
     UINT8 nonce[cfg->nonce_len];
 
     if (cfg->encode_length) {
         *cid_len = (size_t)(*(UINT8 *)cid & 0x3f) + 1;
     }
-    memcpy(nonce, cid + 1, cfg->nonce_len);
-    memset(sid, 0, sizeof(sid));
-    memcpy(sid, cid + 1 + cfg->nonce_len, cfg->sidl);
+    memcpy(nonce, read + 1, cfg->nonce_len);
+    memset(sid, 0, cfg->sidl);
+    memcpy(sid, read + 1 + cfg->nonce_len, cfg->sidl);
     /* 1st Pass */
     if (quic_lb_encrypt_apply_nonce(cfg->crypto_ctx, nonce, cfg->nonce_len, sid,
             cfg->sidl) != ERR_OK) {
@@ -218,7 +219,7 @@ quic_lb_bcid_encrypt(void *ctx, void *cid, void *server_use)
     struct quic_lb_server_ctx *cfg = ctx;
     UINT8 *ptr = cid, *svr_use_ptr = server_use;
     UINT8 block[QUIC_LB_BLOCK_SIZE];
-    int ct_len, i;
+    int ct_len;
 
     quic_lb_set_first_octet(cfg, ptr);
     ptr++;
@@ -262,7 +263,7 @@ static int
 quic_lb_bcid_server_use(void *ctx, void *cid, void *buf)
 {
     struct quic_lb_server_ctx *cfg = ctx;
-    UINT8 *ptr = cid + 1;
+    UINT8 *ptr = (UINT8 *)cid + 1;
     UINT8 block[QUIC_LB_BLOCK_SIZE];
     int pt_len;
 

@@ -42,9 +42,9 @@ static void
 test_quic_lb_alg(enum quic_lb_alg alg)
 {
     UINT8  sid[QUIC_LB_MAX_CID_LEN], cid[QUIC_LB_MAX_CID_LEN];
-    UINT8  result[QUIC_LB_MAX_CID_LEN], nonce[QUIC_LB_MAX_CID_LEN];
-    UINT8  key[TEST_QUIC_KEY_SIZE], server_use[QUIC_LB_MAX_CID_LEN];
-    int    cfg, srv, run, i;
+    UINT8  result[QUIC_LB_MAX_CID_LEN], key[TEST_QUIC_KEY_SIZE];
+    UINT8  server_use[QUIC_LB_MAX_CID_LEN];
+    int    cfg, srv, run;
     size_t cid_len, cidl, svr_use_len, nonce_len, sul, sidl = 0;
     BOOL   len_encode;
     void  *lb_ctx, *server_ctx;
@@ -117,7 +117,7 @@ test_quic_lb_alg(enum quic_lb_alg alg)
                 test_quic_print_buffer(cid, cid_len);
                 printf(" sid ");
                 test_quic_print_buffer(sid, sidl);
-                printf(" server use ");
+                printf(" su ");
                 test_quic_print_buffer(server_use, svr_use_len);
                 printf("\n");
 #endif
