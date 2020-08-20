@@ -86,7 +86,9 @@ test_quic_lb_alg(enum quic_lb_alg alg)
         for (srv = 0; srv < TEST_QUIC_LB_NUM_SRV_ID; srv++) {
             rndset(sid, RND_PSEUDO, sidl);
             server_ctx = NULL;
-            svr_use_len = srv + 1;
+            svr_use_len = (alg == QUIC_LB_BCID) ?
+                    (TEST_QUIC_LB_BLOCK_SIZE - sidl) : srv;
+            svr_use_len++;
             while (server_ctx == NULL) {
                 CUT_ASSERT(svr_use_len > 0); /* do not wraparound */
                 svr_use_len--;
