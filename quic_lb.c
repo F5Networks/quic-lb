@@ -181,7 +181,6 @@ quic_lb_scid_decrypt(void *ctx, void *cid, void *sid, size_t *cid_len)
         *cid_len = (size_t)(*(UINT8 *)cid & 0x3f) + 1;
     }
     memcpy(nonce, read + 1, cfg->nonce_len);
-    memset(sid, 0, cfg->sidl);
     memcpy(sid, read + 1 + cfg->nonce_len, cfg->sidl);
     /* 1st Pass */
     if (quic_lb_encrypt_apply_nonce(cfg->crypto_ctx, nonce, cfg->nonce_len, sid,
@@ -485,8 +484,7 @@ quic_lb_encrypt_cid(void *ctx, void *cid, void *server_use)
     struct quic_lb_server_ctx *context = ctx;
 
     if (context == NULL) {
-        /* No config, return a 5-tuple route */
-        rndset(cid, RND_PSEUDO, context->cidl);
+        rndset(cid, RND_PSEUDO, 8);
         *(UINT8 *)cid |= QUIC_LB_TUPLE_ROUTE;
     } else {
         context->encrypt(ctx, cid, server_use);
