@@ -21,7 +21,7 @@ typedef uint32_t            UINT32;
 typedef uint64_t            UINT64;
 typedef __uint128_t         UINT128;
 typedef enum {FALSE, TRUE}  BOOL;
-typedef enum {ERR_OK, ERR_OTHER} err_t;
+typedef enum {ERR_OK, ERR_REJECT} err_t;
 
 #define umalloc(arg1,arg2,arg3) malloc(arg1)
 #define ufree(arg) free(arg)
@@ -36,6 +36,8 @@ typedef enum {ERR_OK, ERR_OTHER} err_t;
 #define UM_ZERO 0
 
 #define rndset(ptr,type,len) RAND_bytes((unsigned char *)ptr,len)
+
+#define MAX(a, b) (((a) > (b)) ? (a) : (b))
 
 /* Template to limit to a certain range for various types */
 #define RND_RANGE(type,fnname,intmax)                                        \
