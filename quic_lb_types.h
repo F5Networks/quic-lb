@@ -23,17 +23,23 @@ typedef __uint128_t         UINT128;
 typedef enum {FALSE, TRUE}  BOOL;
 typedef enum {ERR_OK, ERR_REJECT} err_t;
 
-#define umalloc(arg1,arg2,arg3) malloc(arg1)
-#define ufree(arg) free(arg)
-#define CUT_ASSERT(expr) assert(expr)
-#define DBG_ASSERT(string,expr) assert(expr)
-
-#define ROUNDUPDIV(n, m) (((n) + ((m) - 1)) / (m))
-
 /* BIGIP constants that don't matter here */
 #define RND_PSEUDO 0
 #define M_FILTER 0
 #define UM_ZERO 0
+static inline void *umalloc(size_t size, int ignored, int cleared)
+{
+    void *ret = malloc(size);
+    if ((ret != NULL) && (cleared == UM_ZERO)) {
+        ret = memset(ret, 0, size);
+    }
+    return ret;
+}
+
+#define ufree(arg) free(arg)
+#define CUT_ASSERT(expr) assert(expr)
+
+#define ROUNDUPDIV(n, m) (((n) + ((m) - 1)) / (m))
 
 #define rndset(ptr,type,len) RAND_bytes((unsigned char *)ptr,len)
 

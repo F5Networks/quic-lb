@@ -289,9 +289,6 @@ quic_lb_lb_ctx_init(enum quic_lb_alg alg, BOOL encode_len, size_t sidl,
     if (ctx == NULL) {
         goto fail;
     }
-#ifdef NOBIGIP
-    memset(ctx, 0, sizeof(struct quic_lb_lb_ctx));
-#endif
     ctx->encode_length = encode_len;
     if (sidl == 0) {
         goto fail;
@@ -364,9 +361,6 @@ quic_lb_server_ctx_init(enum quic_lb_alg alg, UINT8 cr, BOOL encode_len,
     if (ctx == NULL) {
         goto fail;
     }
-#ifdef NOBIGIP
-    memset(ctx, 0, sizeof(struct quic_lb_server_ctx));
-#endif
     if (cr > 0x2) {
         goto fail;
     }
@@ -479,6 +473,9 @@ quic_lb_server_ctx_free(void *ctx)
 
     if (todelete->crypto_ctx != NULL) {
         EVP_CIPHER_CTX_free(todelete->crypto_ctx);
+    }
+    if (todelete->decrypt_ctx != NULL) {
+        EVP_CIPHER_CTX_free(todelete->decrypt_ctx);
     }
     ufree(ctx);
 }
