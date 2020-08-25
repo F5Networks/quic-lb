@@ -38,7 +38,6 @@ static inline void *umalloc(size_t size, int ignored, int cleared)
 
 #define ufree(arg) free(arg)
 #define CUT_ASSERT(expr) assert(expr)
-#define DBG_ASSERT(string,expr) assert(expr)
 
 #define ROUNDUPDIV(n, m) (((n) + ((m) - 1)) / (m))
 
