@@ -25,14 +25,14 @@
 #define QUIC_LB_NONCE_MAX 16
 
 struct quic_lb_lb_ctx {
-    UINT8            cr : 2;
-    UINT8            encode_length : 1;
+    UINT8       cr : 2;
+    UINT8       encode_length : 1;
     enum quic_lb_alg alg : 2;
-    UINT8            reserved : 3;
-    size_t           sidl;
-    int            (*decrypt)(void *ctx, void *cid, void *sid, size_t *cid_len);
-    void            *crypto_ctx;
-    size_t           nonce_len;
+    UINT8       reserved : 3;
+    size_t      sidl;
+    int       (*decrypt)(void *ctx, void *cid, void *sid, size_t *cid_len);
+    void       *crypto_ctx;
+    size_t      nonce_len;
 };
 
 struct quic_lb_server_ctx {
@@ -42,7 +42,7 @@ struct quic_lb_server_ctx {
     size_t           sidl;
     size_t           cidl;
     UINT8            sid[QUIC_LB_USABLE_BYTES];
-    void           (*encrypt)(void *ctx, void*cid, void *server_use);
+    void           (*encrypt)(void *ctx, void *cid, void *server_use);
     int            (*server_use)(void *ctx, void *cid, void *buf);
     void            *crypto_ctx;
     size_t           nonce_len;
@@ -160,7 +160,8 @@ quic_lb_scid_encrypt(void *ctx, void *cid, void *server_use)
         goto err;
     }
     if ((UINT8 *)cid + cfg->cidl > extra) {
-        memcpy(extra, server_use, cfg->cidl - (1 + cfg->nonce_len + cfg->sidl));
+        memcpy(extra, server_use, cfg->cidl - (1 + cfg->nonce_len +
+                cfg->sidl));
     }
     return;
 err:
@@ -183,8 +184,8 @@ quic_lb_scid_decrypt(void *ctx, void *cid, void *sid, size_t *cid_len)
     memcpy(nonce, read + 1, cfg->nonce_len);
     memcpy(sid, read + 1 + cfg->nonce_len, cfg->sidl);
     /* 1st Pass */
-    if (quic_lb_encrypt_apply_nonce(cfg->crypto_ctx, nonce, cfg->nonce_len, sid,
-            cfg->sidl) != ERR_OK) {
+    if (quic_lb_encrypt_apply_nonce(cfg->crypto_ctx, nonce, cfg->nonce_len,
+             sid, cfg->sidl) != ERR_OK) {
         goto err;
     }
     /* 2nd Pass */
@@ -193,8 +194,8 @@ quic_lb_scid_decrypt(void *ctx, void *cid, void *sid, size_t *cid_len)
         goto err;
     }
     /* 3rd Pass */
-    if (quic_lb_encrypt_apply_nonce(cfg->crypto_ctx, nonce, cfg->nonce_len, sid,
-            cfg->sidl) != ERR_OK) {
+    if (quic_lb_encrypt_apply_nonce(cfg->crypto_ctx, nonce, cfg->nonce_len,
+            sid, cfg->sidl) != ERR_OK) {
         goto err;
     }
     return cfg->sidl;
@@ -288,7 +289,9 @@ quic_lb_lb_ctx_init(enum quic_lb_alg alg, BOOL encode_len, size_t sidl,
     if (ctx == NULL) {
         goto fail;
     }
+#ifdef NOBIGIP
     memset(ctx, 0, sizeof(struct quic_lb_lb_ctx));
+#endif
     ctx->encode_length = encode_len;
     if (sidl == 0) {
         goto fail;
@@ -355,13 +358,15 @@ quic_lb_server_ctx_init(enum quic_lb_alg alg, UINT8 cr, BOOL encode_len,
         size_t sidl, UINT8 *key, size_t nonce_len, size_t server_use_len,
         UINT8 *sid)
 {
-    struct quic_lb_server_ctx *ctx = umalloc(sizeof(struct quic_lb_server_ctx),
-            M_FILTER, UM_ZERO);
+    struct quic_lb_server_ctx *ctx = umalloc(
+            sizeof(struct quic_lb_server_ctx), M_FILTER, UM_ZERO);
 
     if (ctx == NULL) {
         goto fail;
     }
+#ifdef NOBIGIP
     memset(ctx, 0, sizeof(struct quic_lb_server_ctx));
+#endif
     if (cr > 0x2) {
         goto fail;
     }
@@ -433,8 +438,8 @@ quic_lb_server_ctx_init(enum quic_lb_alg alg, UINT8 cr, BOOL encode_len,
         if (ctx->decrypt_ctx == NULL) {
             goto fail;
         }
-        if (EVP_CipherInit_ex(ctx->decrypt_ctx, EVP_aes_128_ecb(), NULL, key,
-                NULL, 0) == 0) {
+        if (EVP_CipherInit_ex(ctx->decrypt_ctx, EVP_aes_128_ecb(), NULL,
+                key, NULL, 0) == 0) {
             goto fail;
         }
         if (EVP_CIPHER_CTX_set_padding(ctx->decrypt_ctx, 0) == 0) {
@@ -505,7 +510,8 @@ int
 quic_lb_decrypt_cid(void *ctx, void *cid, void *sid, size_t *cid_len)
 {
     struct quic_lb_lb_ctx *context = ctx;
-    return ((context == NULL) ? 0 : context->decrypt(ctx, cid, sid, cid_len));
+    return ((context == NULL) ? 0 :
+            context->decrypt(ctx, cid, sid, cid_len));
 }
 
 int
@@ -514,4 +520,3 @@ quic_lb_get_server_use(void *ctx, void *cid, void *buf)
     struct quic_lb_server_ctx *context = ctx;
     return ((context == NULL) ? 0 : context->server_use(ctx, cid, buf));
 }
-

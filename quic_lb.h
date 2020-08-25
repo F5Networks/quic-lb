@@ -34,12 +34,12 @@ enum quic_lb_alg {
  *
  * Returns NULL on a number of errors, including invalid parameters.
  */
-void *quic_lb_lb_ctx_init(enum quic_lb_alg alg, BOOL encode_len, size_t sidl,
-        UINT8 *key, size_t nonce_len);
+void *quic_lb_lb_ctx_init(enum quic_lb_alg alg, BOOL encode_len,
+        size_t sidl, UINT8 *key, size_t nonce_len);
 /*
- * Include the config rotation bits, so the server doesn't have to manually add
- * them. The server includes the number of bytes it wants to use for other
- * purposes, and the function will compute the result CID length.
+ * Include the config rotation bits, so the server doesn't have to manually
+ * add them. The server includes the number of bytes it wants to use for
+ * other * purposes, and the function will compute the result CID length.
  */
 void *quic_lb_server_ctx_init(enum quic_lb_alg, UINT8 cr, BOOL encode_len,
         size_t sidl, UINT8 *key, size_t nonce_len, size_t server_use_len,
@@ -50,9 +50,9 @@ void quic_lb_server_ctx_free(void *ctx);
 
 /*
  * Encrypt functions, to be called by the server. The "server use" field can
- * contain bits that encode opaque information for the server. In this API, the
- * first octet is *always* random or length-encoding, and never uses the server
- * use argument.
+ * contain bits that encode opaque information for the server. In this API,
+ * the first octet is *always* random or length-encoding, and never uses the
+ * server_use argument.
  */
 void quic_lb_encrypt_cid(void *ctx, void *cid, void *server_use);
 /* If the server doesn't care about server bits */
@@ -65,10 +65,10 @@ void quic_lb_encrypt_cid_random(void *ctx, void *cid);
 int quic_lb_get_server_use(void *ctx, void *cid, void *buf);
 
 /*
- * Decrypt function to be used by the load balancer. Returns the length of the
- * server ID. If 0, disregard the server ID in 'result' and revert to 5-tuple
- * routing. The cid_len field is only filled if self-encoding; it's not modified
- * otherwise.
+ * Decrypt function to be used by the load balancer. Returns the length of
+ * the server ID. If 0, disregard the server ID in 'sid' and revert to 5-
+ * tuple * routing. The cid_len field is only filled if self-encoding; it's
+ * not modified otherwise.
  */
 int quic_lb_decrypt_cid(void *ctx, void *cid, void *sid, size_t *cid_len);
 #endif /* _QUIC_LB_H */
