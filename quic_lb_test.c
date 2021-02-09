@@ -81,7 +81,7 @@ test_quic_lb_alg(enum quic_lb_alg alg)
             break;
         }
 #endif
-        lb_ctx = quic_lb_lb_ctx_init(alg, len_encode, sidl, key, nonce_len);
+        lb_ctx = quic_lb_lb_ctx_init(alg, len_encode, sidl, key, nonce_len, 0);
         CUT_ASSERT(lb_ctx != NULL);
         for (srv = 0; srv < TEST_QUIC_LB_NUM_SRV_ID; srv++) {
             rndset(sid, RND_PSEUDO, sidl);
@@ -93,7 +93,7 @@ test_quic_lb_alg(enum quic_lb_alg alg)
                 CUT_ASSERT(svr_use_len > 0); /* do not wraparound */
                 svr_use_len--;
                 server_ctx = quic_lb_server_ctx_init(alg, 0x0, len_encode, sidl,
-                    key, nonce_len, svr_use_len, sid);
+                    key, nonce_len, svr_use_len, sid, 0);
             }
             switch (alg) {
             case QUIC_LB_PCID:
@@ -108,7 +108,7 @@ test_quic_lb_alg(enum quic_lb_alg alg)
             }
             for (run = 0; run < TEST_QUIC_LB_PER_SERVER; run++) {
                 rndset(server_use, RND_PSEUDO, svr_use_len);
-                quic_lb_encrypt_cid(server_ctx, cid, server_use);
+                quic_lb_encrypt_cid(server_ctx, cid, server_use, NULL);
                 CUT_ASSERT(quic_lb_decrypt_cid(lb_ctx, cid, result, &cidl) ==
                         sidl);
                 CUT_ASSERT(!len_encode || (cidl == cid_len));

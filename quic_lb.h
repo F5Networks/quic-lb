@@ -32,18 +32,21 @@ enum quic_lb_alg {
  * ignored. If the algorithm is *not* Stream Cipher CID (QUIC_LB_SCID), the
  * nonce_len field is ignored.
  *
+ * If lb_timeout == 0, SIDs are statically allocated.
+ *
  * Returns NULL on a number of errors, including invalid parameters.
  */
 void *quic_lb_lb_ctx_init(enum quic_lb_alg alg, BOOL encode_len,
-        size_t sidl, UINT8 *key, size_t nonce_len);
+        size_t sidl, UINT8 *key, size_t nonce_len, UINT32 lb_timeout);
 /*
  * Include the config rotation bits, so the server doesn't have to manually
  * add them. The server includes the number of bytes it wants to use for
  * other * purposes, and the function will compute the result CID length.
+ * If sid == NULL, it's dynamically allocated.
  */
 void *quic_lb_server_ctx_init(enum quic_lb_alg, UINT8 cr, BOOL encode_len,
         size_t sidl, UINT8 *key, size_t nonce_len, size_t server_use_len,
-        UINT8 *sid);
+        UINT8 *sid, UINT32 lb_timeout);
 /* Free the context */
 void quic_lb_lb_ctx_free(void *ctx);
 void quic_lb_server_ctx_free(void *ctx);
@@ -52,11 +55,11 @@ void quic_lb_server_ctx_free(void *ctx);
  * Encrypt functions, to be called by the server. The "server use" field can
  * contain bits that encode opaque information for the server. In this API,
  * the first octet is *always* random or length-encoding, and never uses the
- * server_use argument.
+ * server_use argument. sid can be NULL if SIDs are statically allocated.
  */
-void quic_lb_encrypt_cid(void *ctx, void *cid, void *server_use);
+void quic_lb_encrypt_cid(void *ctx, void *cid, void *server_use, UINT8 *sid);
 /* If the server doesn't care about server bits */
-void quic_lb_encrypt_cid_random(void *ctx, void *cid);
+void quic_lb_encrypt_cid_random(void *ctx, void *cid, UINT8 *sid);
 /*
  * Decrypt function that explicitly extracts server use bytes. Returns the
  * length of the encoded server data, 0 if there's an error. The bytes

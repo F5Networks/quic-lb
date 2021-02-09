@@ -33,6 +33,7 @@ struct quic_lb_lb_ctx {
     enum quic_lb_alg alg : 2;
     UINT8       reserved : 3;
     size_t      sidl;
+    UINT32      lb_timeout;
     int       (*decrypt)(void *ctx, void *cid, void *sid, size_t *cid_len);
     void       *crypto_ctx;
     size_t      nonce_len;
@@ -45,7 +46,9 @@ struct quic_lb_server_ctx {
     size_t           sidl;
     size_t           cidl;
     UINT8            sid[QUIC_LB_USABLE_BYTES];
-    void           (*encrypt)(void *ctx, void *cid, void *server_use);
+    UINT32           lb_timeout;
+    void           (*encrypt)(void *ctx, void *cid, void *server_use,
+                              UINT8 *sid);
     int            (*server_use)(void *ctx, void *cid, void *buf);
     void            *crypto_ctx;
     size_t           nonce_len;
@@ -67,18 +70,30 @@ quic_lb_set_first_octet(struct quic_lb_server_ctx *ctx, UINT8 *ptr)
 
 /* Algorithm-specific functions */
 static void
-quic_lb_pcid_encrypt(void *ctx, void *cid, void *server_use)
+quic_lb_pcid_encrypt(void *ctx, void *cid, void *server_use, UINT8 *sid)
 {
     struct quic_lb_server_ctx *cfg = ctx;
     UINT8 *ptr = cid;
 
     quic_lb_set_first_octet(cfg, ptr);
     ptr++;
-    memcpy(ptr, cfg->sid, cfg->sidl);
+    if (sid == NULL) {
+        if (cfg->lb_timeout > 0) {
+            goto err;
+        }
+        memcpy(ptr, cfg->sid, cfg->sidl);
+    } else {
+        memcpy(ptr, sid, cfg->sidl);
+    }
     ptr += cfg->sidl;
     if (cfg->cidl > (cfg->sidl + 1)) {
         memcpy(ptr, server_use, cfg->cidl - (cfg->sidl + 1));
     }
+    return;
+err:
+    /* Go to 5-tuple routing*/
+    rndset(cid, RND_PSEUDO, cfg->cidl);
+    *(UINT8 *)cid &= 0xc0;
     return;
 }
 
@@ -133,7 +148,7 @@ err:
 }
 
 static void
-quic_lb_scid_encrypt(void *ctx, void *cid, void *server_use)
+quic_lb_scid_encrypt(void *ctx, void *cid, void *server_use, UINT8 *sidptr)
 {
     struct quic_lb_server_ctx *cfg = ctx;
     UINT8  *nonce = (UINT8 *)cid + 1, *sid = nonce + cfg->nonce_len,
@@ -145,7 +160,14 @@ quic_lb_scid_encrypt(void *ctx, void *cid, void *server_use)
     }
     quic_lb_set_first_octet(cfg, (UINT8 *)cid);
     memcpy(nonce, &cfg->nonce_ctr, cfg->nonce_len); /* Host order! */
-    memcpy(sid, cfg->sid, cfg->sidl);
+    if (sidptr == NULL) {
+        if (cfg->lb_timeout > 0) {
+            goto err;
+        }
+        memcpy(sid, cfg->sid, cfg->sidl);
+    } else {
+        memcpy(sid, sidptr, cfg->sidl);
+    }
     /* 1st Pass */
     if (quic_lb_encrypt_apply_nonce(cfg->crypto_ctx, nonce, cfg->nonce_len, sid,
             cfg->sidl) != ERR_OK) {
@@ -217,7 +239,7 @@ quic_lb_scid_server_use(void *ctx, void *cid, void *server_use)
 }
 
 static void
-quic_lb_bcid_encrypt(void *ctx, void *cid, void *server_use)
+quic_lb_bcid_encrypt(void *ctx, void *cid, void *server_use, UINT8 *sid)
 {
     struct quic_lb_server_ctx *cfg = ctx;
     UINT8 *ptr = cid, *svr_use_ptr = server_use;
@@ -226,7 +248,14 @@ quic_lb_bcid_encrypt(void *ctx, void *cid, void *server_use)
 
     quic_lb_set_first_octet(cfg, ptr);
     ptr++;
-    memcpy(&block[0], cfg->sid, cfg->sidl);
+    if (sid == NULL) {
+        if (cfg->lb_timeout > 0) {
+            goto err;
+        }
+        memcpy(&block[0], cfg->sid, cfg->sidl);
+    } else {
+        memcpy(&block[0], sid, cfg->sidl);
+    }
     memcpy(&block[cfg->sidl], svr_use_ptr, sizeof(block) - cfg->sidl);
     svr_use_ptr += (sizeof(block) - cfg->sidl);
     if ((EVP_EncryptUpdate(cfg->crypto_ctx, ptr, &ct_len, block,
@@ -284,7 +313,7 @@ err:
 
 void *
 quic_lb_lb_ctx_init(enum quic_lb_alg alg, BOOL encode_len, size_t sidl,
-        UINT8 *key, size_t nonce_len)
+        UINT8 *key, size_t nonce_len, UINT32 lb_timeout)
 {
     struct quic_lb_lb_ctx *ctx = umalloc(sizeof(struct quic_lb_lb_ctx),
             M_FILTER, UM_ZERO);
@@ -297,6 +326,10 @@ quic_lb_lb_ctx_init(enum quic_lb_alg alg, BOOL encode_len, size_t sidl,
         goto fail;
     }
     ctx->sidl = sidl;
+    ctx->lb_timeout = lb_timeout;
+    if ((lb_timeout > 0) && (sidl > 7)) {
+        goto fail;
+    }
     switch (alg) {
     case QUIC_LB_PCID:
         if (sidl > QUIC_LB_PCID_SIDL_MAX) {
@@ -356,7 +389,7 @@ fail:
 void *
 quic_lb_server_ctx_init(enum quic_lb_alg alg, UINT8 cr, BOOL encode_len,
         size_t sidl, UINT8 *key, size_t nonce_len, size_t server_use_len,
-        UINT8 *sid)
+        UINT8 *sid, UINT32 lb_timeout)
 {
     struct quic_lb_server_ctx *ctx = umalloc(
             sizeof(struct quic_lb_server_ctx), M_FILTER, UM_ZERO);
@@ -373,7 +406,13 @@ quic_lb_server_ctx_init(enum quic_lb_alg alg, UINT8 cr, BOOL encode_len,
         goto fail;
     }
     ctx->sidl = sidl;
-    memcpy(ctx->sid, sid, sidl);
+    ctx->lb_timeout = lb_timeout;
+    if (lb_timeout == 0) {
+        if (sid == NULL) {
+            goto fail;
+        }
+        memcpy(ctx->sid, sid, sidl);
+    }
     switch (alg) {
     case QUIC_LB_PCID:
         ctx->cidl = 1 + sidl + server_use_len;
@@ -484,7 +523,7 @@ quic_lb_server_ctx_free(void *ctx)
 }
 
 void
-quic_lb_encrypt_cid(void *ctx, void *cid, void *server_use)
+quic_lb_encrypt_cid(void *ctx, void *cid, void *server_use, UINT8 *sid)
 {
     struct quic_lb_server_ctx *context = ctx;
 
@@ -492,18 +531,18 @@ quic_lb_encrypt_cid(void *ctx, void *cid, void *server_use)
         rndset(cid, RND_PSEUDO, 8);
         *(UINT8 *)cid |= QUIC_LB_TUPLE_ROUTE;
     } else {
-        context->encrypt(ctx, cid, server_use);
+        context->encrypt(ctx, cid, server_use, sid);
     }
 }
 
 void
-quic_lb_encrypt_cid_random(void *ctx, void *cid)
+quic_lb_encrypt_cid_random(void *ctx, void *cid, UINT8 *sid)
 {
     struct quic_lb_server_ctx *context = ctx;
     UINT8 server_use[context->cidl];
 
     rndset(server_use, RND_PSEUDO, sizeof(server_use));
-    context->encrypt(ctx, cid, server_use);
+    context->encrypt(ctx, cid, server_use, sid);
 }
 
 int
