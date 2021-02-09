@@ -23,6 +23,9 @@
 #define QUIC_LB_BLOCK_SIZE 16
 #define QUIC_LB_NONCE_MIN 8
 #define QUIC_LB_NONCE_MAX 16
+#define QUIC_LB_PCID_SIDL_MAX 16
+#define QUIC_LB_SCID_SIDL_MAX 19
+#define QUIC_LB_BCID_SIDL_MAX 12
 
 struct quic_lb_lb_ctx {
     UINT8       cr : 2;
@@ -296,7 +299,7 @@ quic_lb_lb_ctx_init(enum quic_lb_alg alg, BOOL encode_len, size_t sidl,
     ctx->sidl = sidl;
     switch (alg) {
     case QUIC_LB_PCID:
-        if (sidl > QUIC_LB_USABLE_BYTES) {
+        if (sidl > QUIC_LB_PCID_SIDL_MAX) {
             goto fail;
         }
         ctx->decrypt = quic_lb_pcid_decrypt;
@@ -307,7 +310,7 @@ quic_lb_lb_ctx_init(enum quic_lb_alg alg, BOOL encode_len, size_t sidl,
                 (nonce_len > QUIC_LB_NONCE_MAX)) {
             goto fail;
         }
-        if (nonce_len + sidl > QUIC_LB_USABLE_BYTES) {
+        if (nonce_len + sidl > QUIC_LB_SCID_SIDL_MAX) {
             goto fail;
         }
         ctx->decrypt = quic_lb_scid_decrypt;
@@ -322,7 +325,7 @@ quic_lb_lb_ctx_init(enum quic_lb_alg alg, BOOL encode_len, size_t sidl,
         ctx->nonce_len = nonce_len;
         break;
     case QUIC_LB_BCID:
-        if (sidl > QUIC_LB_BLOCK_SIZE) {
+        if (sidl > QUIC_LB_BCID_SIDL_MAX) {
             goto fail;
         }
         ctx->decrypt = quic_lb_bcid_decrypt;
