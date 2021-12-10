@@ -42,8 +42,7 @@ void *quic_lb_lb_ctx_init(enum quic_lb_alg alg, BOOL encode_len,
  * other * purposes, and the function will compute the result CID length.
  */
 void *quic_lb_server_ctx_init(enum quic_lb_alg, UINT8 cr, BOOL encode_len,
-        size_t sidl, UINT8 *key, size_t nonce_len, size_t server_use_len,
-        UINT8 *sid);
+        size_t sidl, UINT8 *key, size_t nonce_len, UINT8 *sid);
 /* Free the context */
 void quic_lb_lb_ctx_free(void *ctx);
 void quic_lb_server_ctx_free(void *ctx);
@@ -54,15 +53,7 @@ void quic_lb_server_ctx_free(void *ctx);
  * the first octet is *always* random or length-encoding, and never uses the
  * server_use argument.
  */
-void quic_lb_encrypt_cid(void *ctx, void *cid, void *server_use);
-/* If the server doesn't care about server bits */
-void quic_lb_encrypt_cid_random(void *ctx, void *cid);
-/*
- * Decrypt function that explicitly extracts server use bytes. Returns the
- * length of the encoded server data, 0 if there's an error. The bytes
- * themselves are written to the memory pointed to by *buf.
- */
-int quic_lb_get_server_use(void *ctx, void *cid, void *buf);
+void quic_lb_encrypt_cid(void *ctx, void *cid);
 
 /*
  * Decrypt function to be used by the load balancer. Returns the length of
