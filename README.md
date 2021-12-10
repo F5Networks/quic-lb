@@ -35,6 +35,5 @@ Contribution Guidelines
 ---
 
 Contributions are welcome. However, F5 corporate policy requires contributors to
-complete the Contributor License Agreement and email it to m.duke@f5.com.
-
-https://f5quic.com/quic_lb_cla.pdf
+complete the Contributor License Agreement and email it to a.macedonia@f5.com.
+The CLA is in the root directory of this repo.
