@@ -3,6 +3,7 @@
  * This source code is subject to the terms of the Apache License,
  * version 2.0 (https://www.apache.org/licenses/LICENSE-2.0)
  */
+#include <math.h>
 #include <openssl/evp.h>
 #include "quic_lb.h"
 #ifndef NOBIGIP
@@ -15,8 +16,6 @@
 #include <local/sys/rnd.h>
 #include <local/sys/umem.h>
 #endif
-
-#include <math.h>
 
 #define QUIC_LB_TUPLE_ROUTE 0xc0
 #define QUIC_LB_USABLE_BYTES (QUIC_LB_MAX_CID_LEN - 1)
@@ -94,33 +93,9 @@ quic_lb_pcid_decrypt(void *ctx, void *cid, void *sid, size_t *cid_len)
     return cfg->sidl;
 }
 
-int 
-quic_lb_encrypt_apply_right(void *crypto_ctx, UINT8 *nonce, UINT8 nonce_len,
-        UINT8 *target, UINT8 target_len)
+static void
+quic_lb_truncate_left(QUIC_LB_BLOCK left, QUIC_LB_BLOCK block, size_t inlen) 
 {
-    UINT8 pt[QUIC_LB_BLOCK_SIZE];
-    UINT8 ct[QUIC_LB_BLOCK_SIZE];
-    int ct_len, i;
-
-    memset(pt, 0, sizeof(pt));
-    memcpy(pt, nonce, nonce_len);
-    if (EVP_EncryptUpdate(crypto_ctx, ct, &ct_len, pt, sizeof(pt)) !=
-            1) {
-        goto err;
-    }
-    if (ct_len != sizeof(pt)) {
-        goto err;
-    }
-    for (i = 0; i < target_len; i++) {
-        *(target + i) = ct[i] ^ target[i];
-    }
-    return ERR_OK;
-err:
-    return ERR_REJECT;
-}
-
-void
-quic_lb_truncate_left(QUIC_LB_BLOCK left, QUIC_LB_BLOCK block, size_t inlen) {
     // Copy what we can evenly
     memmove(left, block, inlen / 2);
 
@@ -130,7 +105,9 @@ quic_lb_truncate_left(QUIC_LB_BLOCK left, QUIC_LB_BLOCK block, size_t inlen) {
     }
 }
 
-void quic_lb_truncate_right(QUIC_LB_BLOCK right, QUIC_LB_BLOCK block, size_t inlen) {
+static void
+quic_lb_truncate_right(QUIC_LB_BLOCK right, QUIC_LB_BLOCK block, size_t inlen)
+{
     if ((inlen % 2) == 0) {
         memmove(right, block + (inlen / 2), inlen / 2);
     }
@@ -141,9 +118,12 @@ void quic_lb_truncate_right(QUIC_LB_BLOCK right, QUIC_LB_BLOCK block, size_t inl
     }
 }
 
-void
-quic_lb_encrypt_round_left(void *ctx, QUIC_LB_BLOCK left, QUIC_LB_BLOCK right, QUIC_LB_BLOCK ciphertext, size_t block_id) {
-    struct quic_lb_server_ctx *cfg = ctx; // This is actually sometimes an lb_ctx, so need to better abstract the types
+static void
+quic_lb_encrypt_round_left(void *ctx, QUIC_LB_BLOCK left, QUIC_LB_BLOCK right,
+	QUIC_LB_BLOCK ciphertext, size_t block_id) 
+{
+    // This is actually sometimes an lb_ctx, so need to better abstract the types
+    struct quic_lb_server_ctx *cfg = ctx;
     size_t sidl = cfg->sidl + cfg->nonce_len;
     size_t sidl_copy_size = ceilf(sidl / 2.0);
     int ct_len = 0;
@@ -155,7 +135,8 @@ quic_lb_encrypt_round_left(void *ctx, QUIC_LB_BLOCK left, QUIC_LB_BLOCK right, Q
     memcpy(ciphertext, left, sidl_copy_size);
     ciphertext[QUIC_LB_BLOCK_SIZE - 1] = (UINT8)block_id;
 
-    if (EVP_EncryptUpdate(cfg->crypto_ctx, ciphertext, &ct_len, ciphertext, QUIC_LB_BLOCK_SIZE) != 1) {
+    if (EVP_EncryptUpdate(cfg->crypto_ctx, ciphertext, &ct_len, ciphertext,
+		QUIC_LB_BLOCK_SIZE) != 1) {
         printf("EVP_EncryptUpdate (AES) failed.\n");
         return;
     }
@@ -168,8 +149,11 @@ quic_lb_encrypt_round_left(void *ctx, QUIC_LB_BLOCK left, QUIC_LB_BLOCK right, Q
 }
 
 static void
-quic_lb_encrypt_round_right(void *ctx, QUIC_LB_BLOCK left, QUIC_LB_BLOCK right, QUIC_LB_BLOCK ciphertext, size_t block_id) {
-    struct quic_lb_server_ctx *cfg = ctx; // This is actually sometimes an lb_ctx, so need to better abstract the types
+quic_lb_encrypt_round_right(void *ctx, QUIC_LB_BLOCK left, QUIC_LB_BLOCK right,
+	QUIC_LB_BLOCK ciphertext, size_t block_id)
+{
+    // This is actually sometimes an lb_ctx, so need to better abstract the types
+    struct quic_lb_server_ctx *cfg = ctx;
     size_t sidl = cfg->sidl + cfg->nonce_len;
     size_t sidl_copy_size = ceilf(sidl / 2.0);
     int ct_len = 0;
@@ -181,7 +165,8 @@ quic_lb_encrypt_round_right(void *ctx, QUIC_LB_BLOCK left, QUIC_LB_BLOCK right, 
     memcpy(ciphertext + (QUIC_LB_BLOCK_SIZE - sidl_copy_size), right, sidl_copy_size);
     ciphertext[0] = (UINT8)block_id;
 
-    if (EVP_EncryptUpdate(cfg->crypto_ctx, ciphertext, &ct_len, ciphertext, QUIC_LB_BLOCK_SIZE) != 1) {
+    if (EVP_EncryptUpdate(cfg->crypto_ctx, ciphertext, &ct_len, ciphertext,
+		QUIC_LB_BLOCK_SIZE) != 1) {
         printf("EVP_EncryptUpdate (AES) failed.\n");
         return;
     }
@@ -191,12 +176,6 @@ quic_lb_encrypt_round_right(void *ctx, QUIC_LB_BLOCK left, QUIC_LB_BLOCK right, 
     for (int i = 0; i < sidl; i++) {
         left[i] ^= scratch[i];
     }
-}
-
-static void
-quic_lb_fixup_copy(UINT8 *dest, UINT8 *src, size_t len) {
-    memmove(dest, src, len - 1);
-    dest[len - 1] |= src[len - 1];
 }
 
 static void
@@ -270,6 +249,7 @@ quic_lb_scid_decrypt(void *ctx, void *cid, void *sid, size_t *cid_len)
     if (cfg->encode_length) {
         *cid_len = (size_t)(*(UINT8 *)cid & 0x3f) + 1;
     }
+
     read++;
 
     QUIC_LB_BLOCK left_N =  { 0 },
@@ -519,7 +499,9 @@ quic_lb_decrypt_cid(void *ctx, void *cid, void *sid, size_t *cid_len)
             context->decrypt(ctx, cid, sid, cid_len));
 }
 
-void _quic_lb_test_truncate() {
+void
+_quic_lb_test_truncate()
+{
     QUIC_LB_BLOCK result_buffer = { 0 };
 
     QUIC_LB_BLOCK test0 = { 0x31, 0x44, 0x1a, 0x9c, 0x69, 0xc2, 0x75 };
