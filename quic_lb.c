@@ -203,7 +203,6 @@ static void
 quic_lb_scid_encrypt(void *ctx, void *cid)
 {
     struct quic_lb_server_ctx *cfg = ctx;
-    UINT8 *nonce = (UINT8 *)"AAAAAAAAAAAAAAAA";
 
     size_t sidl = cfg->sidl + cfg->nonce_len;
     size_t sidl_safe_len = ceilf(sidl / 2.0);
@@ -226,10 +225,8 @@ quic_lb_scid_encrypt(void *ctx, void *cid)
     // happen. We should initialize it for the caller but do we know how large
     // it is?
 
-    // cid = sid + nonce
     memcpy(sid, cfg->sid, cfg->sidl);
-    // memcpy(sid + cfg->sidl, &cfg->nonce_ctr, cfg->nonce_len); /* Host order! */
-    memcpy(sid + cfg->sidl, nonce, cfg->nonce_len);
+    memcpy(sid + cfg->sidl, &cfg->nonce_ctr, cfg->nonce_len); /* Host order! */
 
     quic_lb_truncate_left(left_N, sid, sidl);
     quic_lb_truncate_right(right_N, sid, sidl);
