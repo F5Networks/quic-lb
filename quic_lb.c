@@ -156,7 +156,7 @@ quic_lb_encrypt_round_left(void *ctx, QUIC_LB_BLOCK left, QUIC_LB_BLOCK right, Q
     ciphertext[QUIC_LB_BLOCK_SIZE - 1] = (UINT8)block_id;
 
     if (EVP_EncryptUpdate(cfg->crypto_ctx, ciphertext, &ct_len, ciphertext, QUIC_LB_BLOCK_SIZE) != 1) {
-        printf("FAILED TO AES\n");
+        printf("EVP_EncryptUpdate (AES) failed.\n");
         return;
     }
 
@@ -182,7 +182,7 @@ quic_lb_encrypt_round_right(void *ctx, QUIC_LB_BLOCK left, QUIC_LB_BLOCK right, 
     ciphertext[0] = (UINT8)block_id;
 
     if (EVP_EncryptUpdate(cfg->crypto_ctx, ciphertext, &ct_len, ciphertext, QUIC_LB_BLOCK_SIZE) != 1) {
-        printf("FAILED TO AES\n");
+        printf("EVP_EncryptUpdate (AES) failed.\n");
         return;
     }
 
