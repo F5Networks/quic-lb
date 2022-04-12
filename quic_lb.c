@@ -124,8 +124,8 @@ quic_lb_encrypt_round_left(void *ctx, QUIC_LB_BLOCK left, QUIC_LB_BLOCK right,
 {
     // This is actually sometimes an lb_ctx, so need to better abstract the types
     struct quic_lb_server_ctx *cfg = ctx;
-    size_t sidl = cfg->sidl + cfg->nonce_len;
-    size_t sidl_copy_size = ceilf(sidl / 2.0);
+    size_t total_len = cfg->sidl + cfg->nonce_len;
+    size_t sidl_copy_size = ceilf(total_len / 2.0);
     int ct_len = 0;
 
     QUIC_LB_BLOCK scratch = { 0 };
@@ -141,9 +141,9 @@ quic_lb_encrypt_round_left(void *ctx, QUIC_LB_BLOCK left, QUIC_LB_BLOCK right,
         return;
     }
 
-    quic_lb_truncate_right(scratch, ciphertext + (QUIC_LB_BLOCK_SIZE - sidl), sidl);
+    quic_lb_truncate_right(scratch, ciphertext + (QUIC_LB_BLOCK_SIZE - total_len), total_len);
 
-    for (int i = 0; i < sidl; i++) {
+    for (int i = 0; i < total_len; i++) {
         right[i] ^= scratch[i];
     }
 }
@@ -154,8 +154,8 @@ quic_lb_encrypt_round_right(void *ctx, QUIC_LB_BLOCK left, QUIC_LB_BLOCK right,
 {
     // This is actually sometimes an lb_ctx, so need to better abstract the types
     struct quic_lb_server_ctx *cfg = ctx;
-    size_t sidl = cfg->sidl + cfg->nonce_len;
-    size_t sidl_copy_size = ceilf(sidl / 2.0);
+    size_t total_len = cfg->sidl + cfg->nonce_len;
+    size_t sidl_copy_size = ceilf(total_len / 2.0);
     int ct_len = 0;
 
     QUIC_LB_BLOCK scratch = { 0 };
@@ -171,9 +171,9 @@ quic_lb_encrypt_round_right(void *ctx, QUIC_LB_BLOCK left, QUIC_LB_BLOCK right,
         return;
     }
 
-    quic_lb_truncate_left(scratch, ciphertext, sidl);
+    quic_lb_truncate_left(scratch, ciphertext, total_len);
 
-    for (int i = 0; i < sidl; i++) {
+    for (int i = 0; i < total_len; i++) {
         left[i] ^= scratch[i];
     }
 }
@@ -183,8 +183,8 @@ quic_lb_scid_encrypt(void *ctx, void *cid)
 {
     struct quic_lb_server_ctx *cfg = ctx;
 
-    size_t sidl = cfg->sidl + cfg->nonce_len;
-    size_t sidl_safe_len = ceilf(sidl / 2.0);
+    size_t total_len = cfg->sidl + cfg->nonce_len;
+    size_t sidl_safe_len = ceilf(total_len / 2.0);
 
     QUIC_LB_BLOCK sid = { 0 };
 
@@ -207,20 +207,20 @@ quic_lb_scid_encrypt(void *ctx, void *cid)
     memcpy(sid, cfg->sid, cfg->sidl);
     memcpy(sid + cfg->sidl, &cfg->nonce_ctr, cfg->nonce_len); /* Host order! */
 
-    quic_lb_truncate_left(left_N, sid, sidl);
-    quic_lb_truncate_right(right_N, sid, sidl);
+    quic_lb_truncate_left(left_N, sid, total_len);
+    quic_lb_truncate_right(right_N, sid, total_len);
 
     quic_lb_encrypt_round_left(ctx, left_N, right_N, ciphertext, 1);
     quic_lb_encrypt_round_right(ctx, left_N, right_N, ciphertext, 2);
     quic_lb_encrypt_round_left(ctx, left_N, right_N, ciphertext, 3);
     quic_lb_encrypt_round_right(ctx, left_N, right_N, ciphertext, 4);
 
-    if ((sidl % 2) == 0) { 
+    if ((total_len % 2) == 0) { 
         memcpy((UINT8 *)cid + 1, left_N, sidl_safe_len);
         memcpy((UINT8 *)cid + 1 + sidl_safe_len, right_N, sidl_safe_len);
     }
     else {
-        memcpy((UINT8 *)cid + 1 + (sidl - sidl_safe_len), right_N, sidl_safe_len);
+        memcpy((UINT8 *)cid + 1 + (total_len - sidl_safe_len), right_N, sidl_safe_len);
         memcpy((UINT8 *)cid + 1, left_N, sidl_safe_len - 1);
         ((UINT8 *)cid)[sidl_safe_len] |= left_N[sidl_safe_len - 1]; 
     }
@@ -243,8 +243,8 @@ quic_lb_scid_decrypt(void *ctx, void *cid, void *sid, size_t *cid_len)
 
     UINT8 *read = cid;
     // UINT8 nonce[cfg->nonce_len];
-    size_t sidl = cfg->sidl + cfg->nonce_len;
-    size_t sidl_safe_len = ceilf(sidl / 2.0);
+    size_t total_len = cfg->sidl + cfg->nonce_len;
+    size_t sidl_safe_len = ceilf(total_len / 2.0);
 
     if (cfg->encode_length) {
         *cid_len = (size_t)(*(UINT8 *)cid & 0x3f) + 1;
@@ -256,8 +256,8 @@ quic_lb_scid_decrypt(void *ctx, void *cid, void *sid, size_t *cid_len)
                   right_N = { 0 };
 
     QUIC_LB_BLOCK ciphertext = { 0 };
-    quic_lb_truncate_left(left_N, read, sidl);
-    quic_lb_truncate_right(right_N, read, sidl);
+    quic_lb_truncate_left(left_N, read, total_len);
+    quic_lb_truncate_right(right_N, read, total_len);
 
     quic_lb_encrypt_round_right(ctx, left_N, right_N, ciphertext, 0x04);
     quic_lb_encrypt_round_left(ctx, left_N, right_N, ciphertext, 0x03);
@@ -266,12 +266,12 @@ quic_lb_scid_decrypt(void *ctx, void *cid, void *sid, size_t *cid_len)
 
     QUIC_LB_BLOCK result = { 0 };
 
-    if ((sidl % 2) == 0) { 
+    if ((total_len % 2) == 0) { 
         memcpy(result, left_N, sidl_safe_len);
         memcpy(result + sidl_safe_len, right_N, sidl_safe_len);
     }
     else {
-        memcpy(result + (sidl - sidl_safe_len), right_N, sidl_safe_len);
+        memcpy(result + (total_len - sidl_safe_len), right_N, sidl_safe_len);
         memcpy(result, left_N, sidl_safe_len - 1);
         result[sidl_safe_len - 1] |= left_N[sidl_safe_len - 1]; 
     }
@@ -500,7 +500,7 @@ quic_lb_decrypt_cid(void *ctx, void *cid, void *sid, size_t *cid_len)
 }
 
 void
-_quic_lb_test_truncate()
+test_quic_lb_truncate()
 {
     QUIC_LB_BLOCK result_buffer = { 0 };
 
@@ -534,14 +534,14 @@ _quic_lb_test_truncate()
 
         quic_lb_truncate_left(result_buffer, *test->input, test->len);
 	if (memcmp(result_buffer, test->left, ceilf(test->len / 2.0)) != 0) {
-	    printf("Test failed %d\n", i);
+	    printf("Truncate test failed %d\n", i);
 	}
 
         memset(result_buffer, '\0', sizeof(result_buffer));
 
         quic_lb_truncate_right(result_buffer, *test->input, test->len);
 	if (memcmp(result_buffer, test->right, ceilf(test->len / 2.0)) != 0) {
-	    printf("Test failed %d\n", i);
+	    printf("Truncate test failed %d\n", i);
 	}
     }
 }
