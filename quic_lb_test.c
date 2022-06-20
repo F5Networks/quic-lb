@@ -25,6 +25,9 @@
 
 #define TEST_QUIC_KEY_SIZE 16
 
+// Forward declare, test-only code
+void test_quic_lb_truncate();
+
 #ifdef NOBIGIP
 static void
 test_quic_print_buffer(void *buf, size_t len)
@@ -125,6 +128,7 @@ test_quic_lb(void)
     test_quic_lb_alg(QUIC_LB_PCID);
     test_quic_lb_alg(QUIC_LB_SCID);
     test_quic_lb_alg(QUIC_LB_BCID);
+    test_quic_lb_truncate();
 }
 
 #ifndef NOBIGIP
