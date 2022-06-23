@@ -118,6 +118,44 @@ test_quic_lb_alg(enum quic_lb_alg alg)
     }
 }
 
+static void
+test_quic_lb_encrypted_test_vectors() {
+    UINT8 key[TEST_QUIC_KEY_SIZE] = {
+        0x8f, 0x95, 0xf0, 0x92, 0x45, 0x76, 0x5f, 0x80,
+        0x25, 0x69, 0x34, 0xe5, 0x0c, 0x66, 0x20, 0x7f,
+    };
+    UINT8 sid[] = { 0xed, 0x79, 0x3a, 0x51, 0xd4, 0x9b, 0x8f, 0x5f,
+                    0xab, 0x65 };
+    UINT8 cid1[] = { 0x07, 0xfb, 0xfe, 0x05, 0xf7, 0x31, 0xb4, 0x25 };
+    UINT8 cid2[] = { 0x4f, 0x01, 0x09, 0x56, 0xfb, 0x5c, 0x1d, 0x4d,
+                     0x86, 0xe0, 0x10, 0x18, 0x3e, 0x0b, 0x7d, 0x1e };
+    UINT8 cid3[] = { 0x90, 0x4d, 0xd2, 0xd0, 0x5a, 0x7b, 0x0d, 0xe9,
+                     0xb2, 0xb9, 0x90, 0x7a, 0xfb, 0x5e, 0xcf, 0x8c,
+                     0xc3 };
+    UINT8 cid4[] = { 0x12, 0x7a, 0x28, 0x5a, 0x09, 0xf8, 0x52, 0x80,
+                     0xf4, 0xfd, 0x6a, 0xbb, 0x43, 0x4a, 0x71, 0x59,
+                     0xe4, 0xd3, 0xeb };
+    UINT8 result[10];
+    void *ctx;
+    size_t len;
+    ctx = quic_lb_lb_ctx_init(QUIC_LB_SCID, TRUE, 3, key, 4);
+    quic_lb_decrypt_cid(ctx, cid1, result, &len);
+    CUT_ASSERT(memcmp(sid, result, 3) == 0);
+    
+    ctx = quic_lb_lb_ctx_init(QUIC_LB_SCID, TRUE, 10, key, 5);
+    quic_lb_decrypt_cid(ctx, cid2, result, &len);
+    CUT_ASSERT(memcmp(sid, result, 10) == 0);
+    
+    ctx = quic_lb_lb_ctx_init(QUIC_LB_BCID, TRUE, 8, key, 8);
+    quic_lb_decrypt_cid(ctx, cid3, result, &len);
+    CUT_ASSERT(memcmp(sid, result, 8) == 0);
+    
+    ctx = quic_lb_lb_ctx_init(QUIC_LB_SCID, TRUE, 9, key, 9);
+    quic_lb_decrypt_cid(ctx, cid4, result, &len);
+    CUT_ASSERT(memcmp(sid, result, 9) == 0);
+
+}
+
 #ifdef NOBIGIP
 int main(int argc, char* argv[])
 #else
@@ -129,6 +167,7 @@ test_quic_lb(void)
     test_quic_lb_alg(QUIC_LB_SCID);
     test_quic_lb_alg(QUIC_LB_BCID);
     test_quic_lb_truncate();
+    test_quic_lb_encrypted_test_vectors();
 }
 
 #ifndef NOBIGIP
