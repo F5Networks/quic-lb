@@ -141,18 +141,22 @@ test_quic_lb_encrypted_test_vectors() {
     ctx = quic_lb_lb_ctx_init(QUIC_LB_SCID, TRUE, 3, key, 4);
     quic_lb_decrypt_cid(ctx, cid1, result, &len);
     CUT_ASSERT(memcmp(sid, result, 3) == 0);
-    
+    quic_lb_lb_ctx_free(ctx);
+
     ctx = quic_lb_lb_ctx_init(QUIC_LB_SCID, TRUE, 10, key, 5);
     quic_lb_decrypt_cid(ctx, cid2, result, &len);
     CUT_ASSERT(memcmp(sid, result, 10) == 0);
+    quic_lb_lb_ctx_free(ctx);
     
     ctx = quic_lb_lb_ctx_init(QUIC_LB_BCID, TRUE, 8, key, 8);
     quic_lb_decrypt_cid(ctx, cid3, result, &len);
     CUT_ASSERT(memcmp(sid, result, 8) == 0);
+    quic_lb_lb_ctx_free(ctx);
     
     ctx = quic_lb_lb_ctx_init(QUIC_LB_SCID, TRUE, 9, key, 9);
     quic_lb_decrypt_cid(ctx, cid4, result, &len);
     CUT_ASSERT(memcmp(sid, result, 9) == 0);
+    quic_lb_lb_ctx_free(ctx);
 
 }
 
