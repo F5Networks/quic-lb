@@ -69,40 +69,40 @@ test_quic_lb_alg(enum quic_lb_alg alg)
             printf("SCID");
             break;
         case QUIC_LB_BCID:
-	    if (nonce_len + sidl < TEST_QUIC_KEY_SIZE) {
-		    nonce_len = 16 - sidl;
+            if (nonce_len + sidl < TEST_QUIC_KEY_SIZE) {
+                nonce_len = 16 - sidl;
             }
             printf("BCID");
             break;
         }
         printf(" LB configuration: cr_bits 0x0 length_self_encoding: %s"
                 " sid_len %zu nonce_len %zu ", len_encode ? "y" : "n",
-		nonce_len, sidl);
-	if (alg != QUIC_LB_PCID) {
+                nonce_len, sidl);
+        if (alg != QUIC_LB_PCID) {
             printf("key ");
             test_quic_print_buffer(key, TEST_QUIC_KEY_SIZE);
         }
-	printf("\n");
+        printf("\n");
 #endif
         lb_ctx = quic_lb_lb_ctx_init(alg, len_encode, sidl, key, nonce_len);
         CUT_ASSERT(lb_ctx != NULL);
         for (srv = 0; srv < TEST_QUIC_LB_NUM_SRV_ID; srv++) {
             rndset(sid, RND_PSEUDO, sidl);
             server_ctx = quic_lb_server_ctx_init(alg, 0x0, len_encode, sidl,
-		    key, nonce_len, sid);
-	    CUT_ASSERT(server_ctx != NULL);
-	    cid_len = sidl + nonce_len + 1;
+            key, nonce_len, sid);
+            CUT_ASSERT(server_ctx != NULL);
+            cid_len = sidl + nonce_len + 1;
             for (run = 0; run < TEST_QUIC_LB_PER_SERVER; run++) {
                 quic_lb_encrypt_cid(server_ctx, cid);
                 CUT_ASSERT(quic_lb_decrypt_cid(lb_ctx, cid, result, &cidl) ==
                         sidl);
 #ifdef NOBIGIP
-		printf("nonce ");
-		if (alg == QUIC_LB_PCID) {
-		    printf("random");
-		} else {
-		    printf("%u", run);
-		}
+                printf("nonce ");
+                if (alg == QUIC_LB_PCID) {
+                    printf("random");
+                } else {
+                    printf("%u", run);
+                }
                 printf(" cid ");
                 test_quic_print_buffer(cid, cid_len);
                 printf(" sid ");
