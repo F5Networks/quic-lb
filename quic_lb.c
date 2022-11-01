@@ -31,25 +31,21 @@ typedef UINT8 QUIC_LB_BLOCK[QUIC_LB_BLOCK_SIZE];
 struct quic_lb_lb_ctx {
     UINT8       cr : 2;
     UINT8       encode_length : 1;
-    enum quic_lb_alg alg : 5;
     size_t      sidl;
     size_t      nonce_len;
     void       *crypto_ctx;
-
-    int       (*decrypt)(void *ctx, void *cid, void *sid, size_t *cid_len);
 };
 
 struct quic_lb_server_ctx {
     UINT8            cr : 2;
     UINT8            encode_length : 1;
-    enum quic_lb_alg alg : 5;
     size_t           sidl;
     size_t           nonce_len;
     void            *crypto_ctx;
 
     UINT8            sid[QUIC_LB_USABLE_BYTES];
-    void           (*encrypt)(void *ctx, void *cid);
     UINT128          nonce_ctr; /* counter for nonce */
+    UINT128          orig_nonce; /* time to stop using this config */
 };
 
 static void
@@ -64,40 +60,12 @@ quic_lb_set_first_octet(struct quic_lb_server_ctx *ctx, UINT8 *ptr)
     *ptr |= (ctx->cr << 6);
 }
 
-/* Algorithm-specific functions */
-static void
-quic_lb_pcid_encrypt(void *ctx, void *cid)
-{
-    struct quic_lb_server_ctx *cfg = ctx;
-    UINT8 *ptr = cid;
-
-    quic_lb_set_first_octet(cfg, ptr);
-    ptr++;
-    memcpy(ptr, cfg->sid, cfg->sidl);
-    ptr += cfg->sidl;
-    rndset(ptr, RND_PSEUDO, cfg->nonce_len);
-    return;
-}
-
-static int
-quic_lb_pcid_decrypt(void *ctx, void *cid, void *sid, size_t *cid_len)
-{
-    struct quic_lb_lb_ctx *cfg = ctx;
-    UINT8 *ptr = cid;
-
-    if (cfg->encode_length) {
-        *cid_len = (size_t)(*ptr & 0x3f) + 1;
-    }
-    ptr++;
-    memcpy(sid, ptr, cfg->sidl);
-    return cfg->sidl;
-}
-
+/* Helper functions for 4-pass encryption */
 static void
 quic_lb_truncate_left(QUIC_LB_BLOCK left, QUIC_LB_BLOCK block, size_t inlen) 
 {
     // Copy what we can evenly
-    memmove(left, block, inlen / 2);
+    memcpy(left, block, inlen / 2);
 
     if ((inlen % 2) != 0) {
         size_t unfriendly = (inlen / 2);
@@ -108,237 +76,37 @@ quic_lb_truncate_left(QUIC_LB_BLOCK left, QUIC_LB_BLOCK block, size_t inlen)
 static void
 quic_lb_truncate_right(QUIC_LB_BLOCK right, QUIC_LB_BLOCK block, size_t inlen)
 {
-    if ((inlen % 2) == 0) {
-        memmove(right, block + (inlen / 2), inlen / 2);
-    }
-    else {
-        memmove(right, block + (inlen / 2), (inlen / 2) + 1);
-	size_t unfriendly = (inlen / 2);
-        right[0] = (block[unfriendly] & 0x0f);
+    memcpy(right, block + (inlen / 2), inlen / 2);
+    if ((inlen % 2) == 1) {
+        right[inlen/2] = block[inlen - 1];;
+        right[0] &= 0x0f;
     }
 }
 
 static void
-quic_lb_encrypt_round_left(void *ctx, QUIC_LB_BLOCK left, QUIC_LB_BLOCK right,
-	QUIC_LB_BLOCK ciphertext, size_t block_id) 
+quic_lb_encrypt_pass(void *crypto_ctx, QUIC_LB_BLOCK side_to_encrypt,
+        QUIC_LB_BLOCK side_to_xor, UINT8 total_len, UINT8 block_id) 
 {
-    // This is actually sometimes an lb_ctx, so need to better abstract the types
-    struct quic_lb_server_ctx *cfg = ctx;
-    size_t total_len = cfg->sidl + cfg->nonce_len;
-    size_t sidl_copy_size = ceilf(total_len / 2.0);
+    size_t side_len = ceilf(total_len / 2.0);
     int ct_len = 0;
 
     QUIC_LB_BLOCK scratch = { 0 };
-
-    memset(ciphertext, '\0', QUIC_LB_BLOCK_SIZE);
-
-    memcpy(ciphertext, left, sidl_copy_size);
-    ciphertext[QUIC_LB_BLOCK_SIZE - 1] = (UINT8)block_id;
-
-    if (EVP_EncryptUpdate(cfg->crypto_ctx, ciphertext, &ct_len, ciphertext,
-		QUIC_LB_BLOCK_SIZE) != 1) {
+    scratch[0] = total_len;
+    scratch[1] = block_id;
+    memcpy(&scratch[2], side_to_encrypt, side_len);
+    if (EVP_EncryptUpdate(crypto_ctx, scratch, &ct_len, scratch,
+            QUIC_LB_BLOCK_SIZE) != 1) {
         printf("EVP_EncryptUpdate (AES) failed.\n");
         return;
     }
-
-    quic_lb_truncate_right(scratch, ciphertext + (QUIC_LB_BLOCK_SIZE - total_len), total_len);
-
-    for (int i = 0; i < total_len; i++) {
-        right[i] ^= scratch[i];
+    for (int i = 0; i < side_len; i++) {
+        side_to_xor[i] ^= scratch[i];
     }
-}
-
-static void
-quic_lb_encrypt_round_right(void *ctx, QUIC_LB_BLOCK left, QUIC_LB_BLOCK right,
-	QUIC_LB_BLOCK ciphertext, size_t block_id)
-{
-    // This is actually sometimes an lb_ctx, so need to better abstract the types
-    struct quic_lb_server_ctx *cfg = ctx;
-    size_t total_len = cfg->sidl + cfg->nonce_len;
-    size_t sidl_copy_size = ceilf(total_len / 2.0);
-    int ct_len = 0;
-
-    QUIC_LB_BLOCK scratch = { 0 };
-
-    memset(ciphertext, '\0', QUIC_LB_BLOCK_SIZE);
-
-    memcpy(ciphertext + (QUIC_LB_BLOCK_SIZE - sidl_copy_size), right, sidl_copy_size);
-    ciphertext[0] = (UINT8)block_id;
-
-    if (EVP_EncryptUpdate(cfg->crypto_ctx, ciphertext, &ct_len, ciphertext,
-		QUIC_LB_BLOCK_SIZE) != 1) {
-        printf("EVP_EncryptUpdate (AES) failed.\n");
-        return;
-    }
-
-    quic_lb_truncate_left(scratch, ciphertext, total_len);
-
-    for (int i = 0; i < total_len; i++) {
-        left[i] ^= scratch[i];
-    }
-}
-
-static void
-quic_lb_scid_encrypt(void *ctx, void *cid)
-{
-    struct quic_lb_server_ctx *cfg = ctx;
-
-    size_t total_len = cfg->sidl + cfg->nonce_len;
-    size_t sidl_safe_len = ceilf(total_len / 2.0);
-
-    QUIC_LB_BLOCK sid = { 0 };
-
-    // ciphertext store correspoding rounds for each stage
-    QUIC_LB_BLOCK ciphertext = { 0 };
-
-    // left_N, right_N store corresponding variables from each stage
-    QUIC_LB_BLOCK left_N  = { 0 },
-		  right_N = { 0 };
-
-    if (cfg->nonce_ctr > ((((UINT128)0x1 << cfg->nonce_len * 8)) - 1)) {
-        /* Nonce is not big enough for unique CIDs */
-        goto err;
-    }
-
-    // XXX: memset(cid, '\0', sidl); If this isn't initialized, bad things
-    // happen. We should initialize it for the caller but do we know how large
-    // it is?
-
-    memcpy(sid, cfg->sid, cfg->sidl);
-    memcpy(sid + cfg->sidl, &cfg->nonce_ctr, cfg->nonce_len); /* Host order! */
-
-    quic_lb_truncate_left(left_N, sid, total_len);
-    quic_lb_truncate_right(right_N, sid, total_len);
-
-    quic_lb_encrypt_round_left(ctx, left_N, right_N, ciphertext, 1);
-    quic_lb_encrypt_round_right(ctx, left_N, right_N, ciphertext, 2);
-    quic_lb_encrypt_round_left(ctx, left_N, right_N, ciphertext, 3);
-    quic_lb_encrypt_round_right(ctx, left_N, right_N, ciphertext, 4);
-
-    if ((total_len % 2) == 0) { 
-        memcpy((UINT8 *)cid + 1, left_N, sidl_safe_len);
-        memcpy((UINT8 *)cid + 1 + sidl_safe_len, right_N, sidl_safe_len);
-    }
-    else {
-        memcpy((UINT8 *)cid + 1 + (total_len - sidl_safe_len), right_N, sidl_safe_len);
-        memcpy((UINT8 *)cid + 1, left_N, sidl_safe_len - 1);
-        ((UINT8 *)cid)[sidl_safe_len] |= left_N[sidl_safe_len - 1]; 
-    }
-
-    // Last up, create the final message
-    quic_lb_set_first_octet(cfg, (UINT8 *)cid);
-    cfg->nonce_ctr++;
-    return;
-err:
-    /* Go to 5-tuple routing*/
-    rndset(cid, RND_PSEUDO, CIDL(cfg));
-    *(UINT8 *)cid &= 0xc0;
-    return;
-}
-
-static int
-quic_lb_scid_decrypt(void *ctx, void *cid, void *sid, size_t *cid_len)
-{
-    struct quic_lb_lb_ctx *cfg = ctx;
-
-    UINT8 *read = cid;
-    // UINT8 nonce[cfg->nonce_len];
-    size_t total_len = cfg->sidl + cfg->nonce_len;
-    size_t sidl_safe_len = ceilf(total_len / 2.0);
-
-    if (cfg->encode_length) {
-        *cid_len = (size_t)(*(UINT8 *)cid & 0x3f) + 1;
-    }
-
-    read++;
-
-    QUIC_LB_BLOCK left_N =  { 0 },
-                  right_N = { 0 };
-
-    QUIC_LB_BLOCK ciphertext = { 0 };
-    quic_lb_truncate_left(left_N, read, total_len);
-    quic_lb_truncate_right(right_N, read, total_len);
-
-    quic_lb_encrypt_round_right(ctx, left_N, right_N, ciphertext, 0x04);
-    quic_lb_encrypt_round_left(ctx, left_N, right_N, ciphertext, 0x03);
-    quic_lb_encrypt_round_right(ctx, left_N, right_N, ciphertext, 0x02);
-    quic_lb_encrypt_round_left(ctx, left_N, right_N, ciphertext, 0x01);
-
-    QUIC_LB_BLOCK result = { 0 };
-
-    if ((total_len % 2) == 0) { 
-        memcpy(result, left_N, sidl_safe_len);
-        memcpy(result + sidl_safe_len, right_N, sidl_safe_len);
-    }
-    else {
-        memcpy(result + (total_len - sidl_safe_len), right_N, sidl_safe_len);
-        memcpy(result, left_N, sidl_safe_len - 1);
-        result[sidl_safe_len - 1] |= left_N[sidl_safe_len - 1]; 
-    }
-
-    memcpy(sid, result, cfg->sidl);
-
-    return cfg->sidl;
-err:
-    return 0;
-}
-
-static void
-quic_lb_bcid_encrypt(void *ctx, void *cid)
-{
-    struct quic_lb_server_ctx *cfg = ctx;
-    UINT8 *ptr = cid;
-    UINT8 block[QUIC_LB_BLOCK_SIZE];
-    UINT8 ct_nonce_len = QUIC_LB_BLOCK_SIZE - cfg->sidl;
-    int ct_len;
-
-    if (cfg->nonce_ctr > (((UINT128)0x1 << (ct_nonce_len * 8)) - 1)) {
-        /* Nonce is not big enough for unique CIDs */
-        goto err;
-    }
-    quic_lb_set_first_octet(cfg, ptr);
-    ptr++;
-    memcpy(&block[0], cfg->sid, cfg->sidl);
-    /* Note: call below relies on nonce_ctr in host order */
-    memcpy(&block[cfg->sidl], &(cfg->nonce_ctr), ct_nonce_len);
-    if ((EVP_EncryptUpdate(cfg->crypto_ctx, ptr, &ct_len, block,
-             sizeof(block)) != 1) || (ct_len != sizeof(block))) {
-        goto err;
-    }
-    rndset(ptr + sizeof(block), RND_PSEUDO, cfg->nonce_len - ct_nonce_len);
-    cfg->nonce_ctr++;
-    return;
-err:
-    /* Go to 5-tuple routing*/
-    rndset(cid, RND_PSEUDO, CIDL(cfg));
-    *(UINT8 *)cid &= 0xc0;
-    return;
-}
-
-static int
-quic_lb_bcid_decrypt(void *ctx, void *cid, void *sid, size_t *cid_len)
-{
-    struct quic_lb_lb_ctx *cfg = ctx;
-    UINT8 *ptr = cid;
-    UINT8 block[QUIC_LB_BLOCK_SIZE];
-    int pt_len;
-
-    if (cfg->encode_length) {
-        *cid_len = (size_t)(*(UINT8 *)cid & 0x3f) + 1;
-    }
-    if ((EVP_DecryptUpdate(cfg->crypto_ctx, &block[0], &pt_len, ptr + 1,
-            sizeof(block)) != 1) || (pt_len != sizeof(block))) {
-        goto err;
-    }
-    memcpy(sid, block, cfg->sidl);
-    return cfg->sidl;
-err:
-    return 0;
 }
 
 void *
-quic_lb_lb_ctx_init(enum quic_lb_alg alg, BOOL encode_len, size_t sidl,
-        UINT8 *key, size_t nonce_len)
+quic_lb_lb_ctx_init(BOOL encode_len, size_t sidl, UINT8 *key,
+        size_t nonce_len)
 {
     struct quic_lb_lb_ctx *ctx = umalloc(sizeof(struct quic_lb_lb_ctx),
             M_FILTER, UM_ZERO);
@@ -349,40 +117,30 @@ quic_lb_lb_ctx_init(enum quic_lb_alg alg, BOOL encode_len, size_t sidl,
     ctx->crypto_ctx = NULL;
     ctx->encode_length = encode_len;
     if ((sidl == 0) || (nonce_len < 4) ||
-	    ((sidl + nonce_len) > QUIC_LB_USABLE_BYTES)) {
+            ((sidl + nonce_len) > QUIC_LB_USABLE_BYTES)) {
         goto fail;
     }
     ctx->sidl = sidl;
     ctx->nonce_len = nonce_len;
-    switch (alg) {
-    case QUIC_LB_PCID:
-        ctx->decrypt = quic_lb_pcid_decrypt;
-        break;
-    case QUIC_LB_BCID:
-	if ((sidl + nonce_len) < QUIC_LB_BLOCK_SIZE) {
-	    goto fail;
-	}
-	/* Fall through */
-    case QUIC_LB_SCID:
-        ctx->decrypt = (alg == QUIC_LB_BCID) ? quic_lb_bcid_decrypt :
-		quic_lb_scid_decrypt;
-        ctx->crypto_ctx = EVP_CIPHER_CTX_new();
-        if (ctx->crypto_ctx == NULL) {
-            goto fail;
-        }
-        /*
-         * CTR mode just encrypts the nonce using AES-ECB and XORs it with
-         * the plaintext or ciphertext. So for SCID the decryption
-         * operation is technically an encryption (the last arg is 1).
-         */
-        if (EVP_CipherInit_ex(ctx->crypto_ctx, EVP_aes_128_ecb(), NULL, key,
-                 NULL, (alg == QUIC_LB_BCID) ? 0 : 1) == 0) {
-            goto fail;
-        }
-        if (EVP_CIPHER_CTX_set_padding(ctx->crypto_ctx, 0) == 0) {
-            goto fail;
-        }
-        break;
+    if (key == NULL) {
+        return ctx;
+    }
+    ctx->crypto_ctx = EVP_CIPHER_CTX_new();
+    if (ctx->crypto_ctx == NULL) {
+        goto fail;
+    }
+    /*
+     * CTR mode just encrypts the nonce using AES-ECB and XORs it with
+     * the plaintext or ciphertext. So for SCID the decryption
+     * operation is technically an encryption (the last arg is 1).
+     */
+    if (EVP_CipherInit_ex(ctx->crypto_ctx, EVP_aes_128_ecb(), NULL, key,
+              NULL, (sidl + nonce_len == QUIC_LB_BLOCK_SIZE) ? 0 : 1) == 0)
+    {
+        goto fail;
+    }
+    if (EVP_CIPHER_CTX_set_padding(ctx->crypto_ctx, 0) == 0) {
+        goto fail;
     }
     return ctx;
 fail:
@@ -396,8 +154,8 @@ fail:
 }
 
 void *
-quic_lb_server_ctx_init(enum quic_lb_alg alg, UINT8 cr, BOOL encode_len,
-        size_t sidl, UINT8 *key, size_t nonce_len, UINT8 *sid)
+quic_lb_server_ctx_init(UINT8 cr, BOOL encode_len, size_t sidl, UINT8 *key,
+        size_t nonce_len, UINT8 *sid)
 {
     struct quic_lb_server_ctx *ctx = umalloc(
             sizeof(struct quic_lb_server_ctx), M_FILTER, UM_ZERO);
@@ -412,38 +170,30 @@ quic_lb_server_ctx_init(enum quic_lb_alg alg, UINT8 cr, BOOL encode_len,
     ctx->cr = cr;
     ctx->encode_length = encode_len;
     if ((sidl == 0) || (nonce_len < 4) ||
-	    ((sidl + nonce_len) > QUIC_LB_USABLE_BYTES)) {
+            ((sidl + nonce_len) > QUIC_LB_USABLE_BYTES)) {
         goto fail;
     }
     ctx->sidl = sidl;
     ctx->nonce_len = nonce_len;
     ctx->nonce_ctr = 0;
+    rndset(&(ctx->nonce_ctr), RND_PSEUDO, nonce_len);
+    memcpy(&(ctx->orig_nonce), &(ctx->nonce_ctr), sizeof(ctx->nonce_ctr));
+    ctx->nonce_ctr++; /* When nonce_ctr == orig_nonce, quit */
     memcpy(ctx->sid, sid, sidl);
-    switch (alg) {
-    case QUIC_LB_PCID:
-        ctx->encrypt = quic_lb_pcid_encrypt;
-        break;
-    case QUIC_LB_BCID:
-        if (sidl + nonce_len > QUIC_LB_USABLE_BYTES) {
-            goto fail;
-        }
-	/* Fall through */
-    case QUIC_LB_SCID:
-        ctx->encrypt = (alg == QUIC_LB_BCID) ? quic_lb_bcid_encrypt :
-		quic_lb_scid_encrypt;
-        ctx->crypto_ctx = EVP_CIPHER_CTX_new();
-        if (ctx->crypto_ctx == NULL) {
-            goto fail;
-        }
-        if (EVP_CipherInit_ex(ctx->crypto_ctx, EVP_aes_128_ecb(), NULL, key,
-                 NULL, 1) == 0) {
-            EVP_CIPHER_CTX_free(ctx->crypto_ctx);
-            goto fail;
-        }
-        if (EVP_CIPHER_CTX_set_padding(ctx->crypto_ctx, 0) == 0) {
-            goto fail;
-        }
-        break;
+    if (key == NULL) {
+        return ctx;
+    }
+    ctx->crypto_ctx = EVP_CIPHER_CTX_new();
+    if (ctx->crypto_ctx == NULL) {
+        goto fail;
+    }
+    if (EVP_CipherInit_ex(ctx->crypto_ctx, EVP_aes_128_ecb(), NULL, key,
+            NULL, 1) == 0) {
+        EVP_CIPHER_CTX_free(ctx->crypto_ctx);
+        goto fail;
+    }
+    if (EVP_CIPHER_CTX_set_padding(ctx->crypto_ctx, 0) == 0) {
+        goto fail;
     }
     return ctx;
 fail:
@@ -481,22 +231,140 @@ quic_lb_server_ctx_free(void *ctx)
 void
 quic_lb_encrypt_cid(void *ctx, void *cid)
 {
-    struct quic_lb_server_ctx *context = ctx;
+    struct quic_lb_server_ctx *cfg = ctx;
+    UINT8 *ptr = cid;
+    int ct_len;
+    size_t total_len = cfg->sidl + cfg->nonce_len;
+    /* State variables for 4-pass encryption */
+    QUIC_LB_BLOCK left = { 0 }, right = { 0 };
 
-    if (context == NULL) {
-        rndset(cid, RND_PSEUDO, 8);
-        *(UINT8 *)cid |= QUIC_LB_TUPLE_ROUTE;
-    } else {
-        context->encrypt(ctx, cid);
+    if ((cfg == NULL) ||
+            (memcmp(&(cfg->nonce_ctr), &(cfg->orig_nonce),
+                    cfg->nonce_len) == 0)) {
+        goto err;
     }
+    quic_lb_set_first_octet(cfg, ptr);
+    ptr++;
+    memcpy(ptr, cfg->sid, cfg->sidl);
+    ptr += cfg->sidl;
+    if (cfg == NULL) {
+        rndset(ptr, RND_PSEUDO, cfg->nonce_len);
+        goto done;
+    }
+    memcpy(ptr, &(cfg->nonce_ctr), cfg->nonce_len);
+    cfg->nonce_ctr++;
+    ptr -= cfg->sidl;
+    if (total_len == QUIC_LB_BLOCK_SIZE) {
+        if ((EVP_EncryptUpdate(cfg->crypto_ctx, ptr, &ct_len, ptr,
+                 total_len) != 1) || (ct_len != total_len)) {
+            goto err;
+        }
+        goto done;
+    }
+    /* 4-pass encryption */
+    quic_lb_truncate_left(left, ptr, total_len);
+    quic_lb_truncate_right(right, ptr, total_len);
+
+    quic_lb_encrypt_pass(cfg->crypto_ctx, left, right, total_len, 1);
+    if (total_len % 2 == 1) {
+        right[0] &= 0x0f;
+    }
+    quic_lb_encrypt_pass(cfg->crypto_ctx, right, left, total_len, 2);
+    if (total_len % 2 == 1) {
+        left[total_len / 2] &= 0xf0;
+    }
+    quic_lb_encrypt_pass(cfg->crypto_ctx, left, right, total_len, 3);
+    if (total_len % 2 == 1) {
+        right[0] &= 0x0f;
+    }
+    quic_lb_encrypt_pass(cfg->crypto_ctx, right, left, total_len, 4);
+    if (total_len % 2 == 1) {
+        left[total_len / 2] &= 0xf0;
+    }
+
+    memcpy(ptr, left, total_len / 2);
+    ptr += total_len / 2;
+    if (total_len % 2 == 1) {
+        *ptr = left[total_len / 2] & 0xf0;
+        *ptr |= (right[0] & 0x0f);
+        ptr++;
+    }
+    memcpy(ptr, right + (total_len % 2), total_len / 2);
+done:
+    return;
+err:
+    rndset(cid, RND_PSEUDO, 8);
+    *(UINT8 *)cid |= QUIC_LB_TUPLE_ROUTE;
+    return;
 }
 
 int
 quic_lb_decrypt_cid(void *ctx, void *cid, void *sid, size_t *cid_len)
 {
-    struct quic_lb_lb_ctx *context = ctx;
-    return ((context == NULL) ? 0 :
-            context->decrypt(ctx, cid, sid, cid_len));
+    struct quic_lb_server_ctx *cfg = ctx;
+    UINT8 *ptr = cid;
+    int pt_len;
+    size_t total_len = cfg->sidl + cfg->nonce_len;
+    /* State variables for 4-pass encryption */
+    QUIC_LB_BLOCK left = { 0 }, right = { 0 };
+
+    if (cfg == NULL) {
+        goto err;
+    }
+    if (cfg->encode_length) {
+        *cid_len = (size_t)(*ptr & 0x3f) + 1;
+    }
+    ptr++;
+    if (cfg->crypto_ctx == NULL) {
+        memcpy(sid, ptr, cfg->sidl);
+        goto done;
+    }
+    if (total_len == QUIC_LB_BLOCK_SIZE) {
+        if ((EVP_DecryptUpdate(cfg->crypto_ctx, left, &pt_len, ptr,
+                total_len) != 1) || (pt_len != total_len)) {
+            goto err;
+        }
+        memcpy(sid, left, cfg->sidl);
+        goto done;
+    }
+    /* 4-pass encryption */
+    quic_lb_truncate_left(left, ptr, total_len);
+    quic_lb_truncate_right(right, ptr, total_len);
+
+    quic_lb_encrypt_pass(cfg->crypto_ctx, right, left, total_len, 4);
+    if (total_len % 2 == 1) {
+        left[total_len / 2] &= 0xf0;
+    }
+    quic_lb_encrypt_pass(cfg->crypto_ctx, left, right, total_len, 3);
+    if (total_len % 2 == 1) {
+        right[0] &= 0x0f;
+    }
+    quic_lb_encrypt_pass(cfg->crypto_ctx, right, left, total_len, 2);
+    if (total_len % 2 == 1) {
+        left[total_len / 2] &= 0xf0;
+    }
+    if (cfg->sidl > cfg->nonce_len) {
+        quic_lb_encrypt_pass(cfg->crypto_ctx, left, right, total_len, 1);
+        if (total_len % 2 == 1) {
+            right[0] &= 0x0f;
+        }
+    }
+
+    if (cfg->sidl <= total_len / 2) {
+        memcpy(sid, left, cfg->sidl);
+        goto done;
+    }
+    memcpy(sid, left, total_len/2);
+    ptr = sid + total_len / 2;
+    if (total_len % 2 == 1) {
+        *ptr = left[total_len/2] | right[0];
+        ptr++;
+    }
+    memcpy(ptr, right + (total_len % 2), cfg->sidl - (ptr - (UINT8 *)sid));
+done:
+    return cfg->sidl;
+err:
+    return 0;
 }
 
 void
@@ -518,7 +386,7 @@ test_quic_lb_truncate()
 
     typedef struct {
         QUIC_LB_BLOCK *input, *left, *right;
-	size_t len;
+        size_t len;
     } _QUIC_LB_TRUNCATE_TEST;
 
     _QUIC_LB_TRUNCATE_TEST tests[] = {
@@ -530,18 +398,20 @@ test_quic_lb_truncate()
     for (int i = 0; i < sizeof(tests) / sizeof(tests[0]); i++) {
         memset(result_buffer, '\0', sizeof(result_buffer));
 
-	_QUIC_LB_TRUNCATE_TEST *test = &tests[0];
+        _QUIC_LB_TRUNCATE_TEST *test = &tests[0];
 
         quic_lb_truncate_left(result_buffer, *test->input, test->len);
-	if (memcmp(result_buffer, test->left, ceilf(test->len / 2.0)) != 0) {
-	    printf("Truncate test failed %d\n", i);
-	}
+        if (memcmp(result_buffer, test->left, ceilf(test->len / 2.0)) !=
+                0) {
+            printf("Truncate_left test failed %d\n", i);
+        }
 
         memset(result_buffer, '\0', sizeof(result_buffer));
 
         quic_lb_truncate_right(result_buffer, *test->input, test->len);
-	if (memcmp(result_buffer, test->right, ceilf(test->len / 2.0)) != 0) {
-	    printf("Truncate test failed %d\n", i);
-	}
+        if (memcmp(result_buffer, test->right, ceilf(test->len / 2.0)) !=
+                0) {
+            printf("Truncate_right test failed %d\n", i);
+        }
     }
 }
