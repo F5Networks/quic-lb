@@ -14,12 +14,6 @@
 
 #define QUIC_LB_MAX_CID_LEN 20
 
-enum quic_lb_alg {
-    QUIC_LB_PCID, /* Plaintext CID algorithm (Sec 4.1) */
-    QUIC_LB_SCID, /* Stream Cipher CID algorithm (Sec 4.2) */
-    QUIC_LB_BCID, /* Block Cipher CID algorithm (Sec 4.3) */
-};
-
 /* QUIC-LB context functions */
 /*
  * Initialize the QUIC-LB context. One version for load balancers, one for
@@ -34,15 +28,15 @@ enum quic_lb_alg {
  *
  * Returns NULL on a number of errors, including invalid parameters.
  */
-void *quic_lb_lb_ctx_init(enum quic_lb_alg alg, BOOL encode_len,
-        size_t sidl, UINT8 *key, size_t nonce_len);
+void *quic_lb_lb_ctx_init(BOOL encode_len, size_t sidl, UINT8 *key,
+        size_t nonce_len);
 /*
  * Include the config rotation bits, so the server doesn't have to manually
  * add them. The server includes the number of bytes it wants to use for
  * other * purposes, and the function will compute the result CID length.
  */
-void *quic_lb_server_ctx_init(enum quic_lb_alg, UINT8 cr, BOOL encode_len,
-        size_t sidl, UINT8 *key, size_t nonce_len, UINT8 *sid);
+void *quic_lb_server_ctx_init(UINT8 cr, BOOL encode_len, size_t sidl,
+        UINT8 *key, size_t nonce_len, UINT8 *sid);
 /* Free the context */
 void quic_lb_lb_ctx_free(void *ctx);
 void quic_lb_server_ctx_free(void *ctx);

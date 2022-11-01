@@ -42,7 +42,7 @@ test_quic_print_buffer(void *buf, size_t len)
 #endif /* NOBIGIP */
 
 static void
-test_quic_lb_alg(enum quic_lb_alg alg)
+test_quic_lb_alg()
 {
     UINT8  sid[QUIC_LB_MAX_CID_LEN], cid[QUIC_LB_MAX_CID_LEN];
     UINT8  result[QUIC_LB_MAX_CID_LEN], key[TEST_QUIC_KEY_SIZE];
@@ -61,35 +61,19 @@ test_quic_lb_alg(enum quic_lb_alg alg)
             nonce_len--;
         }
 #ifdef NOBIGIP
-        switch(alg) {
-        case QUIC_LB_PCID:
-            printf("PCID");
-            break;
-        case QUIC_LB_SCID:
-            printf("SCID");
-            break;
-        case QUIC_LB_BCID:
-            if (nonce_len + sidl < TEST_QUIC_KEY_SIZE) {
-                nonce_len = 16 - sidl;
-            }
-            printf("BCID");
-            break;
-        }
         printf(" LB configuration: cr_bits 0x0 length_self_encoding: %s"
                 " sid_len %zu nonce_len %zu ", len_encode ? "y" : "n",
                 nonce_len, sidl);
-        if (alg != QUIC_LB_PCID) {
-            printf("key ");
-            test_quic_print_buffer(key, TEST_QUIC_KEY_SIZE);
-        }
+        printf("key ");
+        test_quic_print_buffer(key, TEST_QUIC_KEY_SIZE);
         printf("\n");
 #endif
-        lb_ctx = quic_lb_lb_ctx_init(alg, len_encode, sidl, key, nonce_len);
+        lb_ctx = quic_lb_lb_ctx_init(len_encode, sidl, key, nonce_len);
         CUT_ASSERT(lb_ctx != NULL);
         for (srv = 0; srv < TEST_QUIC_LB_NUM_SRV_ID; srv++) {
             rndset(sid, RND_PSEUDO, sidl);
-            server_ctx = quic_lb_server_ctx_init(alg, 0x0, len_encode, sidl,
-            key, nonce_len, sid);
+            server_ctx = quic_lb_server_ctx_init(0x0, len_encode, sidl,
+                    key, nonce_len, sid);
             CUT_ASSERT(server_ctx != NULL);
             cid_len = sidl + nonce_len + 1;
             for (run = 0; run < TEST_QUIC_LB_PER_SERVER; run++) {
@@ -98,11 +82,7 @@ test_quic_lb_alg(enum quic_lb_alg alg)
                         sidl);
 #ifdef NOBIGIP
                 printf("nonce ");
-                if (alg == QUIC_LB_PCID) {
-                    printf("random");
-                } else {
-                    printf("%u", run);
-                }
+                printf("%u", run);
                 printf(" cid ");
                 test_quic_print_buffer(cid, cid_len);
                 printf(" sid ");
@@ -126,34 +106,34 @@ test_quic_lb_encrypted_test_vectors() {
     };
     UINT8 sid[] = { 0xed, 0x79, 0x3a, 0x51, 0xd4, 0x9b, 0x8f, 0x5f,
                     0xab, 0x65 };
-    UINT8 cid1[] = { 0x07, 0xfb, 0xfe, 0x05, 0xf7, 0x31, 0xb4, 0x25 };
-    UINT8 cid2[] = { 0x4f, 0x01, 0x09, 0x56, 0xfb, 0x5c, 0x1d, 0x4d,
-                     0x86, 0xe0, 0x10, 0x18, 0x3e, 0x0b, 0x7d, 0x1e };
+    UINT8 cid1[] = { 0x07, 0x41, 0x26, 0xee, 0x38, 0xbf, 0x54, 0x54 };
+    UINT8 cid2[] = { 0x4f, 0xcd, 0x3f, 0x57, 0x2d, 0x4e, 0xef, 0xb0,
+                     0x46, 0xfd, 0xb5, 0x1d, 0x16, 0x4e, 0xfc, 0xcc };
     UINT8 cid3[] = { 0x90, 0x4d, 0xd2, 0xd0, 0x5a, 0x7b, 0x0d, 0xe9,
                      0xb2, 0xb9, 0x90, 0x7a, 0xfb, 0x5e, 0xcf, 0x8c,
                      0xc3 };
-    UINT8 cid4[] = { 0x12, 0x7a, 0x28, 0x5a, 0x09, 0xf8, 0x52, 0x80,
-                     0xf4, 0xfd, 0x6a, 0xbb, 0x43, 0x4a, 0x71, 0x59,
-                     0xe4, 0xd3, 0xeb };
+    UINT8 cid4[] = { 0x12, 0x12, 0x4d, 0x1e, 0xb8, 0xfb, 0xb2, 0x1e,
+                     0x4a, 0x49, 0x0c, 0xa5, 0x3c, 0xfe, 0x21, 0xd0,
+                     0x4a, 0xe6, 0x3a };
     UINT8 result[10];
     void *ctx;
     size_t len;
-    ctx = quic_lb_lb_ctx_init(QUIC_LB_SCID, TRUE, 3, key, 4);
+    ctx = quic_lb_lb_ctx_init(TRUE, 3, key, 4);
     quic_lb_decrypt_cid(ctx, cid1, result, &len);
     CUT_ASSERT(memcmp(sid, result, 3) == 0);
     quic_lb_lb_ctx_free(ctx);
 
-    ctx = quic_lb_lb_ctx_init(QUIC_LB_SCID, TRUE, 10, key, 5);
+    ctx = quic_lb_lb_ctx_init(TRUE, 10, key, 5);
     quic_lb_decrypt_cid(ctx, cid2, result, &len);
     CUT_ASSERT(memcmp(sid, result, 10) == 0);
     quic_lb_lb_ctx_free(ctx);
     
-    ctx = quic_lb_lb_ctx_init(QUIC_LB_BCID, TRUE, 8, key, 8);
+    ctx = quic_lb_lb_ctx_init(TRUE, 8, key, 8);
     quic_lb_decrypt_cid(ctx, cid3, result, &len);
     CUT_ASSERT(memcmp(sid, result, 8) == 0);
     quic_lb_lb_ctx_free(ctx);
     
-    ctx = quic_lb_lb_ctx_init(QUIC_LB_SCID, TRUE, 9, key, 9);
+    ctx = quic_lb_lb_ctx_init(TRUE, 9, key, 9);
     quic_lb_decrypt_cid(ctx, cid4, result, &len);
     CUT_ASSERT(memcmp(sid, result, 9) == 0);
     quic_lb_lb_ctx_free(ctx);
@@ -167,9 +147,7 @@ static void
 test_quic_lb(void)
 #endif
 {
-    test_quic_lb_alg(QUIC_LB_PCID);
-    test_quic_lb_alg(QUIC_LB_SCID);
-    test_quic_lb_alg(QUIC_LB_BCID);
+    test_quic_lb_alg();
     test_quic_lb_truncate();
     test_quic_lb_encrypted_test_vectors();
 }
